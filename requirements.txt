@@ -1,6 +1,7 @@
 pandas>=2.0
 numpy>=1.24
-dacy
+spacy==3.7.2
+dacy==2.7.8
 #da_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.6.0/da_core_news_sm-3.6.0-py3-none-any.whl
 tqdm>=4.65
 joblib>=1.3
