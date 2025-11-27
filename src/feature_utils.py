@@ -1,16 +1,17 @@
 from pathlib import Path
 import pandas as pd
-import spacy
+import dacy
 import numpy as np
 import bz2
 from lexical_diversity import lex_div as ld
-from semanticprojection.SemanticProjecter import SemanticProjector
+#from semanticprojection.SemanticProjecter import SemanticProjector
 
 # %%
 
 DATA_DIR = Path("data")
-SPACY_DIR = "data_all/spacy_books"
-SPACY_MODEL = "da_core_news_sm"
+SPACY_DIR = "data/spacy_books"
+#SPACY_MODEL = "da_core_news_sm"
+
 
 SPACY_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,8 +37,13 @@ def process_text(text, text_id):
     if not text:
         raise ValueError(f"Empty text: {text_id}")
 
-    nlp = spacy.load(SPACY_MODEL)
-    doc = nlp(text)
+    #nlp = spacy.load(SPACY_MODEL)
+    dacy_model = dacy.load("da_dacy_large_trf-0.2.0")
+    #doc = nlp(text)
+    if not dacy_model.has_pipe("senter"):
+        dacy_model.add_pipe("senter")
+
+    doc = dacy_model(text)
     doc_attrs = [
         get_spacy_attributes(token, i)
         for i, sent in enumerate(doc.sents)
@@ -60,8 +66,12 @@ def read_spacy_df(text_id, base_dir="data"):
 
 def get_pos_derived_features(text_id):
     df = read_spacy_df(text_id)
+
     pos = df["token_pos_"]
     morph = df["token_morph"].fillna("")
+
+    if morph.str.contains("Voice=Act"):
+        print("no problem with morphs, active verbs exist")
 
     words = df[~df["token_pos_"].isin(["PUNCT", "SPACE", "NUM"])]
     nouns = df[pos == "NOUN"]

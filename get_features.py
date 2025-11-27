@@ -1,5 +1,7 @@
 
 # %%
+!pip install -r requirements.txt
+# %%
 import pandas as pd
 import numpy as np
 
@@ -8,7 +10,7 @@ import logging
 from tqdm import tqdm
 
 from src.feature_utils import process_text, compressrat, get_pos_derived_features, avg_sentlen, avg_wordlen
-from src.feature_utils import calculate_dependency_distances, project_sentiment
+from src.feature_utils import calculate_dependency_distances#, project_sentiment
 from joblib import Parallel, delayed
 import time
 import json
@@ -29,7 +31,7 @@ logging.basicConfig(
 
 # get data
 # load it from HF
-dataset = load_dataset("chcaa/")
+dataset = load_dataset("chcaa/eno-embs-old-news", split="train", columns=["id", "text", "predicted_category"])
 # get the train split
 df = dataset["train"].to_pandas()
 df.head()
@@ -63,6 +65,7 @@ def process_row(row):
         features["avg_sentlen"], features["num_sents"] = avg_sentlen(text_id)
         features.update(calculate_dependency_distances(text_id))
         features["compression_ratio"] = compressrat(text_id)
+        # sentiment
         features["sentiment"] = project_sentiment(text_id)
 
         if isinstance(features["sentiment"], (list, np.ndarray)):
