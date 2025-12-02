@@ -75,6 +75,25 @@ print(spacy_df.head)
 spacy_df.to_csv(f"{out_dir}/spacy_tagged_output.csv", index=False, encoding='utf-8-sig')
 
 # %%
+# with dacy
+import dacy
+
+#open example txt
+with open(f"text.txt", "r") as f:
+    example_text = f.read()
+
+dacy_model = dacy.load("da_dacy_large_trf-0.2.0")
+dacy_doc = dacy_model(example_text)
+#make df
+dacy_rows = [{"word": token.text, "pos": token.pos_} for token in dacy_doc]
+# remove spaces
+dacy_rows = [row for row in dacy_rows if row["word"].strip() != ""]
+dacy_df = pd.DataFrame(dacy_rows)
+print(dacy_df.head)
+dacy_df.to_csv(f"{out_dir}/dacy_tagged_output.csv", index=False, encoding='utf-8-sig')
+# %%
+dacy.models()
+# %%
 
 # 
 from transformers import pipeline
