@@ -14,45 +14,49 @@ from lexical_diversity import lex_div as ld
 SPACY_DIR = Path("data/spacy_books/")
 SPACY_DIR.mkdir(parents=True, exist_ok=True)
 
-# Load model once
-nlp = dacy.load("da_dacy_large_trf-0.2.0")
-if not nlp.has_pipe("senter"):
-    nlp.add_pipe("senter")
-nlp.initialize()
+# Load model once, ensure transformer is ready
+dacy_model = dacy.load("da_dacy_large_trf-0.2.0")
+# Force a dummy pass to warm up the transformer
+_ = dacy_model("Dette er bare en dummy sætning til initiering.")
 
-def process_text(text, text_id, nlp=nlp):
+def process_text(text, text_id, dacy_model=dacy_model):
+    """
+    Process text and save token-level attributes to CSV.
+    Uses the working transformer-based approach from DaCy.
+    Preserves sentence IDs for downstream analysis.
+    """
     spacy_file = SPACY_DIR / f"{text_id}_spacy.csv"
     if spacy_file.exists():
         return pd.read_csv(spacy_file)
 
-    # Process the full text
-    doc = nlp(text)
-    print(doc.sents)
-    all_attrs = []
-    for sent_id, sent in enumerate(doc.sents):
-        for token in sent:
-            all_attrs.append([
-                token.i,              # global token index
-                token.text,
-                token.lemma_,
-                token.is_punct,
-                token.is_stop,
-                token.morph,
-                token.pos_,
-                token.tag_,
-                token.dep_,
-                token.head.i,         # global head index
-                sent_id
-            ])
+    # Directly process the text (ensures correct POS output)
+    doc = dacy_model(text)
 
-    # Build dataframe
-    df = pd.DataFrame(all_attrs, columns=[
-        "token_i", "token_text", "token_lemma_", "token_is_punct",
-        "token_is_stop", "token_morph", "token_pos_", "token_tag_",
-        "token_dep_", "token_head", "sent_id"
-    ])
+    # Assign sentence IDs manually
+    sent_id_map = {}
+    for i, sent in enumerate(doc.sents):
+        for token in sent:
+            sent_id_map[token.i] = i
+
+    # Build token-level dataframe
+    rows = [{
+        "token_i": t.i,
+        "token_text": t.text,
+        "token_lemma_": t.lemma_,
+        "token_is_punct": t.is_punct,
+        "token_is_stop": t.is_stop,
+        "token_morph": t.morph,
+        "token_pos_": t.pos_,
+        "token_tag_": t.tag_,
+        "token_dep_": t.dep_,
+        "token_head_i": t.head.i,
+        "sent_id": sent_id_map.get(t.i, -1)
+    } for t in doc]
+
+    df = pd.DataFrame(rows)
     df.to_csv(spacy_file, index=False)
     return df
+
 
 def read_spacy_df(text_id):
     return pd.read_csv(SPACY_DIR / f"{text_id}_spacy.csv")
@@ -60,9 +64,6 @@ def read_spacy_df(text_id):
 
 # --- SYNTACTICS & STYLISTICS ---
 
-def read_spacy_df(text_id, base_dir="data"):
-    path = f"{base_dir}/spacy_books/{text_id}_spacy.csv"
-    return pd.read_csv(path)
 
 
 def get_pos_derived_features(text_id):

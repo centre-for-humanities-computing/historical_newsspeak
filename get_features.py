@@ -11,13 +11,10 @@ import json
 
 from src.feature_utils import (
     process_text, compressrat, get_pos_derived_features,
-    avg_sentlen, avg_wordlen, calculate_dependency_distances
+    compute_basic_lengths, calculate_dependency_distances
     # , project_sentiment
 )
-
-# %%
-from joblib import Parallel, delayed
-import dacy
+import os
 
 # %%
 # CONFIGURE
@@ -33,40 +30,53 @@ logging.basicConfig(
     force=True
 )
 
-# %%
-# Load dataset
-dataset = load_dataset(
-    "chcaa/eno-embs-old-news",
-    split="train",
-    columns=["id", "text", "predicted_category"]
-)
-df = dataset.to_pandas()
-print(f"Total rows: {len(df)}")
-
 
 # %%
-# Apply replacements
-with open("data/replacements.json") as f:
-    replacements = json.load(f)
+# load custom filtered dataset if exists
+FILE_PATH = f"data/{ts}_filtered_texts.csv"
 
-def apply_replacements(text, replacements):
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    return text
+if os.path.exists(FILE_PATH):
+    print("Loading filtered texts from file...")
+    df = pd.read_csv(FILE_PATH, encoding="utf-8")
+else:
+    # Load dataset
+    dataset = load_dataset(
+        "chcaa/eno-embs-old-news",
+        split="train",
+        columns=["id", "text", "predicted_category"]
+    )
+    df = dataset.to_pandas()
+    print(f"Total rows: {len(df)}")
 
-df["text"] = df["text"].astype(str).apply(lambda x: apply_replacements(x, replacements))
+    print("No filtered texts file found, proceeding with filtering...")
 
-# %%
-# Filter short or empty texts
-df = df[df['text'].str.strip().str.len() > 0]
-df = df[df['text'].str.split(" ").str.len() >= 10] # filtering below 10 words
-print(f"Rows after filtering: {len(df)}")
+    # see if file exists
+
+    # Apply replacements
+    with open("data/replacements.json") as f:
+        replacements = json.load(f)
+
+    def apply_replacements(text, replacements):
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        return text
+
+    df["text"] = df["text"].astype(str).apply(lambda x: apply_replacements(x, replacements))
+
+    # Filter short or empty texts
+    df = df[df['text'].str.strip().str.len() > 0]
+    df = df[df['text'].str.count(r'\S+') >= 10]  # counts sequences of non-whitespace
+    print(f"Rows after filtering: {len(df)}")
+
+    # save to file for record
+    df.to_csv(f"data/{ts}_filtered_texts.csv", index=False, encoding="utf-8")
+
 
 # %%
 # save to file for record
 df.to_csv(f"data/{ts}_filtered_texts.csv", index=False, encoding="utf-8")
+df.head()
 # %%
-
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
