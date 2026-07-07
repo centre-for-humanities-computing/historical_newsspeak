@@ -86,13 +86,25 @@ def clean_ocr_text(text, replacements):
 
     return text.strip()
 
+
+SHARD_SIZE = 5000  # number of articles per parquet file
+
+# function: save_shard
+def save_shard(rows, shard_id):
+    shard_df = pd.DataFrame(rows)
+    shard_df.to_parquet(
+        run_dir / f"shard_{shard_id:05d}.parquet",
+        index=False
+    )
+    # Save processed article ids
+    processed_ids = shard_df["article_id"].unique()
+
+    with open(run_dir / "processed_ids.txt", "a") as f:
+        for article_id in processed_ids:
+            f.write(f"{article_id}\n")
+
 # function: save_spacy_doc
-def save_spacy_doc(doc, text_id):
-
-    out_file = run_dir / f"{text_id}.parquet"
-
-    if out_file.exists():
-        return
+def doc_to_rows(doc, text_id):
 
     rows = []
 
@@ -109,18 +121,19 @@ def save_spacy_doc(doc, text_id):
                 "tag": token.tag_,
                 "dep": token.dep_,
                 "morph": str(token.morph),
-                # NER
+
                 "ent_type": token.ent_type_,
                 "ent_iob": token.ent_iob_,
-                # indexes
+
                 "head_i": token.head.i,
                 "sent_id": sent_id,
                 "start_char": token.idx,
                 "end_char": token.idx + len(token.text),
-                "article_id": text_id,})
 
-    df = pd.DataFrame(rows)
-    df.to_parquet(run_dir / f"{text_id}.parquet")
+                "article_id": text_id,
+            })
+
+    return rows
 
 # %%
 
@@ -138,20 +151,35 @@ df = df[df['text'].str.strip().str.len() > 0]
 df = df[df['text'].str.count(r'\S+') >= 10]  # counts sequences of non-whitespace
 print(f"Rows after filtering: {len(df)}")
 
+# shuffle dataset
+df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
 # %%
 
 texts = [clean_ocr_text(t, replacements=replacements) for t in df["text"].tolist()]
 ids = df["id"].tolist()
 
-# for text_id, doc in zip(ids, dacy_model.pipe(texts, batch_size=16)):
-#     save_spacy_doc(doc, text_id)
 
-pilot_texts = texts[:10]
-pilot_ids = ids[:10]
+buffer = []
+shard_id = 0
 
-for text_id, doc in tqdm(
-    zip(pilot_ids, dacy_model.pipe(pilot_texts, batch_size=16)),
-    total=len(pilot_ids),
-    desc="Parsing texts"):
-    
-    save_spacy_doc(doc, text_id)
+for i, (text_id, doc) in enumerate(
+    tqdm(
+        zip(ids, dacy_model.pipe(texts, batch_size=16)),
+        total=len(ids),
+        desc="Parsing texts"
+    )):
+
+    buffer.extend(doc_to_rows(doc, text_id))
+
+    # every N articles
+    if (i + 1) % SHARD_SIZE == 0:
+        save_shard(buffer, shard_id)
+
+        buffer = []
+        shard_id += 1
+
+
+# save remaining documents
+if buffer:
+    save_shard(buffer, shard_id)
