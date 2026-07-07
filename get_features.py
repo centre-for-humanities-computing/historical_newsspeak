@@ -76,6 +76,7 @@ else:
 # save to file for record
 df.to_csv(f"data/{ts}_filtered_texts.csv", index=False, encoding="utf-8")
 df.head()
+
 # %%
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)

@@ -226,6 +226,8 @@ def compressrat(text_id):
 
 # --- GERMAN DETECTION ---- #
 
+# "Average sentence-level confidence of German across the text."
+# we want to say "Over time, texts show increasing/decreasing classifier confidence that sentences are German, controlling for proper nouns."
 from langdetect import detect_langs, DetectorFactory
 DetectorFactory.seed = 0 # for reproducibility
 
@@ -263,6 +265,24 @@ def german_probability(text_id):
     return sum(probs) / len(probs) if probs else 0.0
 
 
+# we want to add:
+def german_sentence_share(text_id, threshold=0.9):
+    df = read_spacy_df(text_id)
+    df = df[df["token_pos_"] != "PROPN"]
+
+    sents = (df.groupby("sent_id")["token_text"].apply(lambda x: " ".join(t for t in x if isinstance(t, str))))
+    sents = [s for s in sents if s.strip()]
+
+    is_german = []
+    for s in sents:
+        try:
+            langs = detect_langs(s)
+            de_prob = next((l.prob for l in langs if l.lang == "de"), 0.0)
+            is_german.append(de_prob >= threshold)
+        except:
+            is_german.append(False)
+
+    return sum(is_german) / len(is_german) if is_german else 0.0
 
 # # --- SENTIMENT ANALYSIS ---
 

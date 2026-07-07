@@ -82,6 +82,7 @@ import dacy
 with open(f"text.txt", "r") as f:
     example_text = f.read()
 
+# %%
 dacy_model = dacy.load("da_dacy_large_trf-0.2.0")
 dacy_doc = dacy_model(example_text)
 #make df

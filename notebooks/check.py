@@ -3,195 +3,512 @@ import json
 import pandas as pd
 import glob
 from datasets import load_dataset
+import umap
+import numpy as np
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import spearmanr
-
-# %%
-# get all files ending in stylstics_all.jsonl in data folder
-file_paths = glob.glob("../data/*_stylistics_all.jsonl")
-print(f"Found {len(file_paths)} files.")
-
-# load and merge all files
-data = []
-for file_path in file_paths:
-    with open(file_path) as f:
-        lines = f.readlines()
-        data.extend([json.loads(line) for line in lines])
-
-# list of dicts to df
-data = pd.DataFrame(data)
-# drop duplicates based on article_id
-data = data.drop_duplicates(subset=['article_id'])
-# print number of records
-print(f"Total records loaded: {len(data)}")
-# see amount of nans in each column
-print(data.isna().sum())
-# and zeroes
-print("--------------")
-print((data == 0).sum())
-print(data.columns)
-data.head()
-# %%
-
-# load org data
-dataset = load_dataset(
-    "chcaa/eno-embs-old-news",
-    split="train",
-    columns=["id", "text", "predicted_category", "date", "newspaper"]
-)
-df = dataset.to_pandas()
-print(f"Total rows: {len(df)}")
-
-
-# %%
-# merge on id
-merged = pd.merge(df, data, left_on="id", right_on="article_id", how="inner")
-print(f"Merged rows: {len(merged)}")
-
-
-# remove paratext
-merged = merged[merged['predicted_category'] != 'Paratext']
-# fix date to ordinal
-merged['date'] = pd.to_datetime(merged['date'], errors='coerce')
-merged['date_ordinal'] = merged['date'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
-
-# add ficiton tags
-fiction_tags = pd.read_csv("../data/20251015_all_predictions_w_id.csv")
-merged = pd.merge(merged, fiction_tags[['id', 'predicted_label']], left_on='id', right_on='id', how='left')
-print(f"Merged with fiction tags, total rows: {len(merged)}")
-# replace "predicted_category" with fiction if predicted_label == "fiction" or "non-fiction", else leave as is
-merged['predicted_category'] = merged.apply(lambda row: row['predicted_label'] if row['predicted_label'] in ['fiction'] else row['predicted_category'], axis=1)
-# see amount of national news vs other
-print(merged['predicted_category'].value_counts())
-
-merged.head()
-
-
-# %%
-def scatter_per_group(data, x_col, y_col, group_col):
-    plt.figure(figsize=(12, 6))
-    sns.set_style("whitegrid")
-    sns.scatterplot(data=data, x=x_col, y=y_col, hue=group_col, alpha=0.2)
-    plt.xticks(rotation=45)
-    plt.title(f'{y_col} Over Time by {group_col}')
-    # add lines for each group
-    groups = data[group_col].unique()
-    for group in groups:
-        group_data = data[data[group_col] == group]
-        sns.regplot(x=group_data[x_col], y=group_data[y_col], scatter=False, label=f'{group} Trend')
-    plt.xlabel(x_col)
-    plt.ylabel(y_col)
-    plt.tight_layout()
-    plt.show()
-
-# %%
-# check 1 feature
-measure = "avg_wordlen"
-
-for category in merged['predicted_category'].unique():
-    stats_df = merged[merged['predicted_category'] == category][[measure, 'date_ordinal', 'date']].dropna().copy()
-    stat, p_value = spearmanr(stats_df['date_ordinal'], stats_df[measure])
-    print(f"Rho btw {measure} vs date for category {category}: {stat:.4f} (p-value: {p_value:.4e})")
-
-scatter_per_group(merged, 'date_ordinal', measure, 'predicted_category')
-
-stats_df = merged[[measure, 'date_ordinal', 'date']].dropna().copy()
-stat, p_value = spearmanr(stats_df['date_ordinal'], stats_df[measure])
-print(f"Rho btw {measure} vs date (for all): {stat:.4f} (p-value: {p_value:.4e})")
-
-# see german_prob over time
-plt.figure(figsize=(12, 6))
-sns.scatterplot(data=stats_df, x='date', y=measure, marker='o', alpha=0.1)
-plt.xticks(rotation=45)
-plt.title(f'{measure} Over Time')
-plt.xlabel('Date')
-plt.ylabel('German Probability')
-plt.tight_layout()
-plt.show()
-
-# %%
-# check all features
-dat = merged.loc[merged['predicted_category'] == 'International news']
-
-# for all cols, do the spearman correlation with date
-results = []
-for col in dat.columns:
-    if col in ['id', 'text', 'predicted_category', 'article_id', 'date', 'year', "newspaper", "date_ordinal"]:
-        continue
-
-    slice = dat[[col, 'date_ordinal', 'date']].dropna()
-    print(f"Processing column: {col}, n={len(dat)}")
-
-    stat, p_value = spearmanr(slice['date_ordinal'], slice[col])
-    results.append((col, stat, p_value))
-
-# create df
-results_df = pd.DataFrame(results, columns=['feature', 'spearman_corr', 'p_value'])
-# sort by absolute value of spearman_corr
-results_df['abs_spearman_corr'] = results_df['spearman_corr'].abs()
-results_df = results_df.sort_values(by='abs_spearman_corr', ascending=False)
-
-# show me the top corr in scatterplots (4)
-top5 = results_df.head(5)['feature'].tolist()
-for feature in top5:
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(data=dat, x='date_ordinal', y=feature, marker='o', alpha=0.1)
-    plt.title(f'{feature} Over Time for Fiction')
-    plt.xlabel('Date (ordinal)')
-    plt.ylabel(feature)
-    plt.tight_layout()
-    plt.show()
-
-results_df.head(30)
-
-# %%
-
-# see top german_prob articles over time
-top_german = dat.sort_values(by='german_prob', ascending=False).head(1000)
-top_german.sort_values(by='date').tail(10)[['id', 'date', 'german_prob', 'text']]
-# %%
-# lets see how a linear model would perform on predicting date_ordinal from features
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 
-# prepare data
-feature_cols = [col for col in dat.columns if col not in ['id', 'text', 'predicted_category', 'article_id', 'date', 'year', "newspaper", "date_ordinal", 'predicted_label']]
-X = dat[feature_cols].fillna(0)
-y = dat['date_ordinal'].fillna(0)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-# train model
+import numpy as np
+from sklearn.metrics import mean_absolute_error
+
+# %%
+# # get all files ending in stylstics_all.jsonl in data folder
+# file_paths = glob.glob("../data/*_stylistics_all.jsonl")
+# print(f"Found {len(file_paths)} files.")
+
+# # load and merge all files
+# data = []
+# for file_path in file_paths:
+#     with open(file_path) as f:
+#         lines = f.readlines()
+#         data.extend([json.loads(line) for line in lines])
+
+# # list of dicts to df
+# data = pd.DataFrame(data)
+# # drop duplicates based on article_id
+# data = data.drop_duplicates(subset=['article_id'])
+# # print number of records
+# print(f"Total records loaded: {len(data)}")
+# # see amount of nans in each column
+# print(data.isna().sum())
+# # and zeroes
+# print("--------------")
+# print((data == 0).sum())
+# print(data.columns)
+
+# # load org data
+# dataset = load_dataset(
+#     "chcaa/eno-embs-old-news",
+#     split="train",
+#     columns=["id", "text", "predicted_category", "date", "newspaper"]
+# )
+# df = dataset.to_pandas()
+# print(f"Total rows: {len(df)}")
+
+# # merge on id
+# merged = pd.merge(df, data, left_on="id", right_on="article_id", how="inner")
+# print(f"Merged rows: {len(merged)}")
+
+# ### data cleaning ###
+# # remove paratext
+# merged = merged[merged['predicted_category'] != 'Paratext']
+# # fix date to ordinal
+# merged['date'] = pd.to_datetime(merged['date'], errors='coerce')
+# merged['date_ordinal'] = merged['date'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
+
+# # add ficiton tags
+# fiction_tags = pd.read_csv("../data/20251015_all_predictions_w_id.csv")
+# merged = pd.merge(merged, fiction_tags[['id', 'predicted_label']], left_on='id', right_on='id', how='left')
+# print(f"Merged with fiction tags, total rows: {len(merged)}")
+# # replace "predicted_category" with fiction if predicted_label == "fiction" or "non-fiction", else leave as is
+# merged['predicted_category'] = merged.apply(lambda row: row['predicted_label'] if row['predicted_label'] in ['fiction'] else row['predicted_category'], axis=1)
+# # see amount of national news vs other
+# print(merged['predicted_category'].value_counts())
+
+# merged.to_csv("../data/merged_data_26-02-27.csv", index=False)
+# merged.head()
+
+# %%
+
+# START
+
+merged = pd.read_csv("../data/merged_data_26-02-27.csv")
+print(f"Total rows after loading merged data: {len(merged)}")
+
+# take all after 1740
+merged = merged[merged['date_ordinal'] > pd.to_datetime('1740-01-01').toordinal()]
+print(f"After 1740: {len(merged)}")
+
+# defining features 
+features = ['nominal_verb_ratio', 'msttr', 'noun_ttr', 'verb_ttr', 
+            'personal_pronoun_ratio', 'function_word_ratio', 'of_ratio', 
+            'that_ratio', 'past_tense_ratio', #'present_tense_ratio', 
+            'passive_ratio', 'adjective_adverb_ratio', #'wordcount', 
+            'avg_wordlen', 'avg_sentlen', 
+            #'num_sents', 
+            'avg_ndd', 'std_ndd', 
+            'avg_mdd', 'std_mdd'] #, 'compression_ratio'] #, 'german_prob']
+
+# Defining palette for categories
+palette = sns.color_palette("hsv_r", n_colors=4)
+# Convert to a list of RGB tuples
+palette_list = list(palette)
+# change second to light green
+palette_list[2] = (0.5, 0.9, 0.7)  # light green
+
+
+# %%
+# histogram over time colored by category
+merged['dt'] = pd.to_datetime(merged['date'], errors='coerce')
+merged['date_ordinal'] = merged['dt'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
+merged['year'] = merged['dt'].dt.year
+merged['category'] = [x.split(' ')[0] for x in merged['predicted_category']] # take first word as category
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'height_ratios': [1, 3], 'hspace': 0.2}, dpi=500)
+sns.set_style("whitegrid")
+
+# ---- TOP: total volume per year ----
+sns.histplot(data=merged, x='year', discrete=True, color="grey", ax=ax1, kde=True, alpha=0.6)
+ax1.set_ylabel("Total Articles")
+# change ytick label number to 5k if 5,000
+labels1 = [item.get_text() for item in ax1.get_yticklabels()]
+labels1[1] = ['5k' if labels1[1] == '5000' else labels1[1]][0]
+ax1.set_yticklabels(labels1)
+
+# ---- BOTTOM: proportional stacked histogram ----
+sns.histplot(data=merged, x='year', hue='category', multiple='fill', discrete=True, legend=True, ax=ax2,palette=palette_list, alpha=0.8)
+ax2.set_ylabel("Proportion")
+ax2.set_xlabel("Year")
+sns.move_legend(ax2,"upper right",  bbox_to_anchor=(.92, .6), frameon=False, title="Category",ncol=4)
+plt.tight_layout()
+plt.show()
+
+merged['category'].value_counts()
+
+# %%
+
+# check whether std increases over time per feature
+norm_feats = []
+# normalize fetaures to space 0-1 for better visualization
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+
+for feat in features:
+    merged[feat + '_norm'] = scaler.fit_transform(merged[[feat]].fillna(0))
+    norm_feats.append(feat + '_norm')
+
+plt.figure(figsize=(12, 6))
+for feat in norm_feats:
+    year_std = merged.groupby('year')[feat].std().reset_index()
+    sns.lineplot(data=year_std, x='year', y=feat, label=feat.replace('_norm', ''))
+plt.title('Standard Deviation of Normalized Features Over Time')
+plt.xlabel('Year')
+plt.ylabel('Standard Deviation (0-1 normalized)')
+plt.legend(title='Feature', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+# do correlation of feature std with year
+corr_dict = {}
+for feat in norm_feats:
+    year_std = merged.groupby('year')[feat].std().reset_index()
+    stat, p_value = spearmanr(year_std['year'], year_std[feat])
+    start_end_diff = year_std[feat].iloc[-1] - year_std[feat].iloc[0]
+    range_feat = (round(year_std[feat].min(),2), round(year_std[feat].max(),2))
+    corr_dict[feat] = (stat, p_value, start_end_diff, range_feat)
+
+df_corr = pd.DataFrame.from_dict(corr_dict, orient='index', columns=['spearman_corr', 'p_value', 'start-end_diff', 'range'])
+df_corr.head(20)
+
+# %%
+# same thing, but per genre instead of overall
+for category in merged['predicted_category'].unique():
+    plt.figure(figsize=(12, 6))
+    cat_data = merged[merged['predicted_category'] == category]
+    for feat in norm_feats:
+        year_std = cat_data.groupby('year')[feat].std().reset_index()
+        sns.lineplot(data=year_std, x='year', y=feat, label=feat.replace('_norm', ''))
+    plt.title(f'SD {category.upper()}')
+    plt.xlabel('Year')
+    plt.ylabel('Standard Deviation (0-1 normalized)')
+    plt.legend(title='Feature', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.show()
+
+corr_dict_cat = {}
+for category in merged['predicted_category'].unique():
+    cat_data = merged[merged['predicted_category'] == category]
+    for feat in norm_feats:
+        year_std = cat_data.groupby('year')[feat].std().reset_index()
+        stat, p_value = spearmanr(year_std['year'], year_std[feat])
+        start_end_diff = year_std[feat].iloc[-1] - year_std[feat].iloc[0]
+        range_feat = (round(year_std[feat].min(),2), round(year_std[feat].max(),2))
+        corr_dict_cat[(category.upper(), feat)] = (stat, p_value, start_end_diff, range_feat)
+
+df_corr_cat = pd.DataFrame.from_dict(corr_dict_cat, orient='index', columns=['spearman_corr', 'p_value', 'start-end_diff', 'range'])
+df_corr_cat.head(60)
+
+# %%
+
+def scatter_per_group(data, x_col, y_col, group_col):
+    plt.figure(figsize=(5, 5), dpi=500)
+    sns.set_style("whitegrid")
+    sns.scatterplot(data=data, x=x_col, y=y_col, color='grey', alpha=0.05)
+    plt.xticks(rotation=45)
+    # reduce ticks to ~10 evenly spaced points
+    x_min, x_max = data[x_col].min(), data[x_col].max()
+    ticks = np.linspace(x_min, x_max, 10)
+    # convert ordinal → datetime properly
+    tick_labels = [pd.Timestamp.fromordinal(int(t)).strftime('%Y') for t in ticks]
+    plt.xticks(ticks=ticks, labels=tick_labels, rotation=45)
+
+    # add lines for each group
+    groups = data[group_col].unique()
+    for group in groups:
+        group_data = data[data[group_col] == group]
+        sns.regplot(x=group_data[x_col], y=group_data[y_col], scatter=False, label=group, line_kws={'linewidth': 2, 'alpha': 0.7, 'color': palette_list[groups.tolist().index(group)]})
+    plt.xlabel(x_col)
+    plt.ylabel(y_col)
+    plt.legend(title="Category", loc='upper right')
+    plt.tight_layout()
+    plt.show()
+
+#### plot feats side by side #####
+def plot_features_side_by_side(data, x_col, y_cols,          # list of feature names
+    group_col, palette_list, figsize_per_plot=(4, 4), dpi=500):
+    sns.set_style("whitegrid")
+    
+    n_plots = len(y_cols)
+    fig, axes = plt.subplots(1, n_plots, figsize=(figsize_per_plot[0] * n_plots, figsize_per_plot[1]), dpi=dpi,sharex=True)
+    
+    # If only one feature is passed, axes is not iterable
+    if n_plots == 1:
+        axes = [axes]
+    
+    groups = data[group_col].unique().tolist()
+    
+    # Precompute x ticks
+    x_min, x_max = data[x_col].min(), data[x_col].max()
+    ticks = np.linspace(x_min, x_max, 10)
+    tick_labels = [pd.Timestamp.fromordinal(int(t)).strftime('%Y') for t in ticks]
+    
+    for ax, y_col in zip(axes, y_cols):
+        if y_col == 'avg_sentlen':
+            # remove outliers for avg_sentlen (e.g. articles with avg_sentlen > 100)
+            plot_data = data[data[y_col] < 200]
+        else:
+            plot_data = data
+        
+        # Scatter (background cloud)
+        sns.scatterplot(data=plot_data, x=x_col,y=y_col,color='grey',alpha=0.05,ax=ax)
+        
+        # Group regression lines
+        for i, group in enumerate(groups):
+            group_data = plot_data[plot_data[group_col] == group]
+            
+            sns.regplot(x=group_data[x_col], y=group_data[y_col], scatter=False, ax=ax,
+                label=group,line_kws={
+                    'linewidth': 2,
+                    'alpha': 0.7,
+                    'color': palette_list[i]})
+        
+        ax.set_xlabel(x_col.split('_')[0].capitalize())  # e.g. "date_ordinal" → "Date"
+        ax.set_ylabel(y_col.replace('_', ' ').capitalize())  # e.g. "avg_wordlen" → "Avg Wordlen"
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(tick_labels, rotation=45)
+        # set title to spearman correlation
+        stat, p_value = spearmanr(plot_data[x_col], plot_data[y_col])
+        ax.set_title(fr"$\bar{{\rho}}$: {stat:.2f}")
+    
+    # Single legend (from first axis)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, title="Category", loc='center right')
+    plt.tight_layout()
+    plt.show()
+
+# %%
+# check features
+
+def corr_with_date(data, measure):
+    stats_df = data[[measure, 'date_ordinal', 'date']].dropna().copy()
+    stat, p_value = spearmanr(stats_df['date_ordinal'], stats_df[measure])
+    print(f"Rho btw {measure} vs date: {stat:.4f} (p-value: {p_value:.4e})")
+
+    for category in data['predicted_category'].unique():
+        cat_data = data[data['predicted_category'] == category]
+        stats_df_cat = cat_data[[measure, 'date_ordinal', 'date']].dropna().copy()
+        stat_cat, p_value_cat = spearmanr(stats_df_cat['date_ordinal'], stats_df_cat[measure])
+        print(f"  Rho btw {measure} vs date for category {category}: {stat_cat:.4f} (p-value: {p_value_cat:.4e})")
+    print("\n")
+    scatter_per_group(merged, 'date_ordinal', measure, 'predicted_category')
+    return measure
+
+# for feat in ['avg_wordlen', 'avg_sentlen']:
+#     corr_with_date(merged, feat)
+
+plot_features_side_by_side(merged, 'date_ordinal', ['avg_wordlen', 'avg_sentlen'], 'predicted_category', palette_list)
+
+# %%
+# print top 10 correlation of all features with date for all categories
+categories = merged['predicted_category'].unique()
+for category in categories:
+    dat = merged.loc[merged['predicted_category'] == category]
+    print(f"\n Category: {category}, n={len(dat)} ")
+    results = []
+    for col in features:
+        slice = dat[[col, 'date_ordinal', 'date']].dropna()
+        stat, p_value = spearmanr(slice['date_ordinal'], slice[col])
+        results.append((col, stat, p_value))
+
+    results_df = pd.DataFrame(results, columns=['feature', 'spearman_corr', 'p_value'])
+    results_df['abs_spearman_corr'] = results_df['spearman_corr'].abs()
+    results_df = results_df.sort_values(by='abs_spearman_corr', ascending=False)
+    print(results_df.head(10).reset_index(drop=True))
+
+# %%
+
+# see top german_prob articles over time
+top_german = dat.sort_values(by='german_prob', ascending=False).head(10)
+for i, r in top_german.head(10).iterrows():
+    print(f"Date: {r['date']}, German Prob: {r['german_prob']:.4f}, Category: {r['predicted_category']}")
+    print(f"Text: {r['text'][:1000]}...\n")
+
+
+# %%
+# lets see how a linear model would perform on predicting date_ordinal from features
+from sklearn.model_selection import cross_val_score
+selected_features = features
+
+linreg_df = merged.copy()
+# standardize features
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+linreg_df[selected_features] = scaler.fit_transform(linreg_df[selected_features].fillna(0))
+
+
+# %%
+
+print(f"\nAll categories together, n={len(merged)}")
+
+X = linreg_df[selected_features].fillna(0)
+y = linreg_df['date_ordinal'].fillna(0)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42)
+
 model = LinearRegression()
 model.fit(X_train, y_train)
-# predict
 y_pred = model.predict(X_test)
-# evaluate
+
+# --- Core metrics ---
 mse = mean_squared_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+mae = mean_absolute_error(y_test, y_pred)
 r2 = r2_score(y_test, y_pred)
-print(f"Linear Regression MSE: {mse:.2f}, R2: {r2:.4f}")
 
-# scatter plot of predicted vs actual
-plt.figure(figsize=(8, 6))
-sns.scatterplot(x=y_test, y=y_pred, alpha=0.5)
-plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
-plt.xlabel('Actual Date Ordinal')
-plt.ylabel('Predicted Date Ordinal')
-plt.title('Predicted vs Actual Date Ordinal for Fiction Articles')
+print(f"MSE: {mse:.2f}")
+print(f"RMSE: {rmse:.2f} days (~{rmse/365:.2f} years)")
+print(f"MAE: {mae:.2f} days (~{mae/365:.2f} years)")
+print(f"R2: {r2:.4f}")
+
+# --- Baseline: predict mean date ---
+baseline_pred = np.full_like(y_test, y_train.mean())
+baseline_mse = mean_squared_error(y_test, baseline_pred)
+baseline_rmse = np.sqrt(baseline_mse)
+
+print(f"\nBaseline RMSE: {baseline_rmse:.2f} days (~{baseline_rmse/365:.2f} years)")
+print(f"Improvement over baseline (RMSE reduction): {baseline_rmse - rmse:.2f} days")
+
+# --- Cross-validated R2 ---
+cv_scores = cross_val_score(model, X, y, cv=5, scoring="r2")
+print(f"\nCV R2: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
+
+# --- Standardized coefficients ---
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+model_std = LinearRegression()
+model_std.fit(X_scaled, y)
+
+coefs = pd.Series(model_std.coef_, index=selected_features)
+coefs = coefs.sort_values(key=np.abs, ascending=False)
+
+print("\nTop 10 standardized coefficients:")
+print(coefs.head(10))
+
+# visualize pred/actual
+plt.figure(figsize=(6, 6))
+sns.scatterplot(x=y_test, y=y_pred, alpha=0.2, color='grey')
+plt.plot(
+    [y_test.min(), y_test.max()],
+    [y_test.min(), y_test.max()],
+    'r--'
+)
+plt.xlabel('Actual Date (ordinal)')
+plt.ylabel('Predicted Date (ordinal)')
+plt.title('Predicted vs Actual Date (All Categories)')
 plt.tight_layout()
-
+plt.show()
 
 
 # %%
-# see year range
-merged['year'] = merged['date'].apply(lambda x: int(x.split('-')[0]) if isinstance(x, str) and '-' in x else None)
-print(f"Year range: {merged['year'].min()} - {merged['year'].max()}")
 
-# see newspaper distribution
-print(merged['newspaper'].value_counts())
+for cat in linreg_df['predicted_category'].unique():
+
+    lin_df = linreg_df.loc[linreg_df['predicted_category'] == cat].copy()
+    n = len(lin_df)
+    print(f"\nCategory: {cat}, n={n}")
+
+    X = lin_df[selected_features].fillna(0)
+    y = lin_df['date_ordinal']
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42)
+
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # --- metrics ---
+    mse = mean_squared_error(y_test, y_pred)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    print(f"R2: {r2:.4f}")
+    print(f"RMSE: {rmse:.2f} days (~{rmse/365:.2f} years)")
+    print(f"MAE: {mae:.2f} days (~{mae/365:.2f} years)")
+
+    # --- baseline (predict mean year) ---
+    baseline_pred = np.full_like(y_test, y_train.mean())
+    baseline_rmse = np.sqrt(mean_squared_error(y_test, baseline_pred))
+    print(f"Baseline RMSE: {baseline_rmse/365:.2f} years")
+    print(f"RMSE improvement: {(baseline_rmse - rmse)/365:.2f} years")
+
+    # --- predicted vs actual ---
+    plt.figure(figsize=(4, 4))
+    sns.scatterplot(x=y_test, y=y_pred, alpha=0.2)
+    plt.plot(
+        [y_test.min(), y_test.max()],
+        [y_test.min(), y_test.max()],
+        'r--'
+    )
+    plt.xlabel('Actual Date (ordinal)')
+    plt.ylabel('Predicted Date (ordinal)')
+    plt.title(f'Predicted vs Actual Date for {cat}')
+    plt.tight_layout()
+    #plt.show()
+
+    # # print top 5 features by absolute standardized coefficient
+    # scaler = StandardScaler()
+    # X_scaled = scaler.fit_transform(X)
+    # model_std = LinearRegression()
+    # model_std.fit(X_scaled, y)
+    # coefs = pd.Series(model_std.coef_, index=selected_features)
+    # coefs = coefs.sort_values(key=np.abs, ascending=False)
+    # print("\nTop 5 standardized coefficients:")
+    # print(coefs.head(5))
+
+    # # plot residuals
+    # residuals = y_test - y_pred
+    # plt.figure(figsize=(4, 4))
+    # sns.scatterplot(x=y_pred, y=residuals, alpha=0.2)
+    # plt.axhline(0, color='r', linestyle='--')
+    # plt.xlabel('Predicted Date (ordinal)')
+    # plt.ylabel('Residuals (Actual - Predicted)')
+    # plt.tight_layout()
+    # plt.show()
 
 # %%
+# plot newspapers and categories over time
+plt.figure(figsize=(12, 6))
+sns.histplot(data=merged, x='date', hue='newspaper', multiple='fill', discrete=True, palette='tab10', alpha=0.8)
+plt.title('Article Count by Newspaper Over Time')
+plt.xlabel('Year')
+plt.ylabel('Article Count')
+plt.legend(title='Newspaper', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+
+# %%
+reducer = umap.UMAP(random_state=42)
+embedding = reducer.fit_transform(merged[features].fillna(0))
+print("features: ", features)
+
+plt.figure(figsize=(10, 8))
+sns.scatterplot(x=embedding[:, 0], y=embedding[:, 1], hue=merged['predicted_category'], alpha=0.5, palette=palette_list)
+plt.title('UMAP Projection of Articles Colored by Predicted Category')
+plt.xlabel('UMAP Dimension 1')
+plt.ylabel('UMAP Dimension 2')
+plt.legend(title='Predicted Category', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+# %%
+
+# plot internal heterogeneity of categories over time by looking at the standard deviation of features per year and category
+heterogeneity = merged.groupby(['year', 'predicted_category'])[features].std().reset_index()
+# plot heterogeneity over time for top 3 categories
+top_categories = merged['predicted_category'].value_counts().head(3).index.tolist()
+plt.figure(figsize=(12, 6))
+for category in top_categories:
+    cat_data = heterogeneity[heterogeneity['predicted_category'] == category]
+    plt.plot(cat_data['year'], cat_data[features].mean(axis=1), label=category)
+plt.title('Average Standard Deviation of Features Over Time by Category')
+plt.xlabel('Year')
+plt.ylabel('Average Std Dev of Features')
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+# %%
+
 # check any corr between wordcount and features
 measure = "wordcount"
 
