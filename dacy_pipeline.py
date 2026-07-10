@@ -2,7 +2,6 @@
 
 import torch
 import pandas as pd
-import dacy
 from pathlib import Path
 import time
 from datasets import load_dataset
@@ -17,12 +16,14 @@ print(torch.cuda.is_available())
 
 # %%
 
-dacy_model = dacy.load(
-    "da_dacy_large_trf-0.2.0",
-    disable=[])
 
-dacy_model.to("cuda")
+import spacy
 
+spacy.require_gpu()
+nlp = spacy.load("da_dacy_large_trf", disable=["coref", "span_resolver", "span_cleaner", "entity_linker"])   # or: import da_dacy_large_trf; nlp = da_dacy_large_trf.load()
+# dacy_model = dacy.load("da_dacy_large_trf-0.2.0", disable=[])
+
+doc = nlp("Dette er en dansk sætning.")
 
 # %%
 
@@ -150,7 +151,7 @@ pilot_texts = texts[:10]
 pilot_ids = ids[:10]
 
 for text_id, doc in tqdm(
-    zip(pilot_ids, dacy_model.pipe(pilot_texts, batch_size=16)),
+    zip(pilot_ids, nlp.pipe(pilot_texts, batch_size=16)),
     total=len(pilot_ids),
     desc="Parsing texts"):
     
