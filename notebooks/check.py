@@ -1,7 +1,5 @@
 # %%
-import json
 import pandas as pd
-import glob
 from datasets import load_dataset
 import umap
 import numpy as np
@@ -15,75 +13,40 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 import numpy as np
 from sklearn.metrics import mean_absolute_error
+from pathlib import Path
 
 # %%
-# # get all files ending in stylstics_all.jsonl in data folder
-# file_paths = glob.glob("../data/*_stylistics_all.jsonl")
-# print(f"Found {len(file_paths)} files.")
 
-# # load and merge all files
-# data = []
-# for file_path in file_paths:
-#     with open(file_path) as f:
-#         lines = f.readlines()
-#         data.extend([json.loads(line) for line in lines])
+CWD = Path.cwd().parent
+DATA_PATH = CWD / "data"
+FIGS_PATH = CWD / "figs"
 
-# # list of dicts to df
-# data = pd.DataFrame(data)
-# # drop duplicates based on article_id
-# data = data.drop_duplicates(subset=['article_id'])
-# # print number of records
-# print(f"Total records loaded: {len(data)}")
-# # see amount of nans in each column
-# print(data.isna().sum())
-# # and zeroes
-# print("--------------")
-# print((data == 0).sum())
-# print(data.columns)
+# %%
 
-# # load org data
-# dataset = load_dataset(
-#     "chcaa/eno-embs-old-news",
-#     split="train",
-#     columns=["id", "text", "predicted_category", "date", "newspaper"]
-# )
-# df = dataset.to_pandas()
-# print(f"Total rows: {len(df)}")
+dataset = load_dataset("chcaa/eno-newspapers-enriched", split="train")
+df_meta = dataset.to_pandas()
+df_meta.head()
 
-# # merge on id
-# merged = pd.merge(df, data, left_on="id", right_on="article_id", how="inner")
-# print(f"Merged rows: {len(merged)}")
+# %%
+df_feats = pd.read_parquet(DATA_PATH / "features_combined_standardized.parquet")
 
-# ### data cleaning ###
-# # remove paratext
-# merged = merged[merged['predicted_category'] != 'Paratext']
-# # fix date to ordinal
-# merged['date'] = pd.to_datetime(merged['date'], errors='coerce')
-# merged['date_ordinal'] = merged['date'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
+# stats
+print(f"Total rows: {len(df_feats)}")
+print(df_feats.columns)
+print(df_feats.describe())
 
-# # add ficiton tags
-# fiction_tags = pd.read_csv("../data/20251015_all_predictions_w_id.csv")
-# merged = pd.merge(merged, fiction_tags[['id', 'predicted_label']], left_on='id', right_on='id', how='left')
-# print(f"Merged with fiction tags, total rows: {len(merged)}")
-# # replace "predicted_category" with fiction if predicted_label == "fiction" or "non-fiction", else leave as is
-# merged['predicted_category'] = merged.apply(lambda row: row['predicted_label'] if row['predicted_label'] in ['fiction'] else row['predicted_category'], axis=1)
-# # see amount of national news vs other
-# print(merged['predicted_category'].value_counts())
+print(df.nsmallest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
+print(df.nlargest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
 
-# merged.to_csv("../data/merged_data_26-02-27.csv", index=False)
-# merged.head()
+# %%
+df = df_feats.merge(df_meta, on="article_id", how="left")
 
 # %%
 
 # START
 
-merged = pd.read_csv("../data/merged_data_26-02-27.csv")
-print(f"Total rows after loading merged data: {len(merged)}")
 
-# take all after 1740
-merged = merged[merged['date_ordinal'] > pd.to_datetime('1740-01-01').toordinal()]
-print(f"After 1740: {len(merged)}")
-
+# %%
 # defining features 
 features = ['nominal_verb_ratio', 'msttr', 'noun_ttr', 'verb_ttr', 
             'personal_pronoun_ratio', 'function_word_ratio', 'of_ratio', 
