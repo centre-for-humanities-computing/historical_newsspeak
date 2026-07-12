@@ -1,4 +1,0 @@
-2025-12-02 22:02:58,849 - INFO - Created vocabulary
-2025-12-02 22:02:58,853 - INFO - Finished initializing nlp object
-2025-12-02 22:09:47,207 - INFO - Created vocabulary
-2025-12-02 22:09:47,212 - INFO - Finished initializing nlp object

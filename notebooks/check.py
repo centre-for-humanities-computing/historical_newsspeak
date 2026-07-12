@@ -23,8 +23,9 @@ FIGS_PATH = CWD / "figs"
 
 # %%
 
-dataset = load_dataset("chcaa/eno-newspapers-enriched", split="train")
-df_meta = dataset.to_pandas()
+ds = load_dataset("chcaa/eno-newspapers-enriched", split="train", streaming=True, 
+                       columns=['id', 'date', 'newspaper', 'predicted_category','fiction_prob','non_fiction_prob','fictionality_tag'])
+df_meta = ds.to_pandas()
 df_meta.head()
 
 # %%
@@ -72,6 +73,10 @@ features = ['nominal_verb_ratio',
        'german_probability', 'german_sentence_share',
        'semantic_sentiment_standardized'
        ]
+
+complexity_features = ['lix', 'rix', 'mtld', 'cttr', 'avg_ndd', 'avg_mdd', 'avg_wordlen', 'avg_sentlen']
+register_features = ['nominal_verb_ratio', 'personal_pronoun_ratio', 'function_word_ratio', 
+                      'passive_ratio', 'adjective_adverb_ratio', 'of_ratio', 'that_ratio']
 
 # Defining palette for categories
 palette = sns.color_palette("hsv_r", n_colors=4)
