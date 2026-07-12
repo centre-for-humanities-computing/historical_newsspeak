@@ -30,13 +30,23 @@ df_meta.head()
 # %%
 df_feats = pd.read_parquet(DATA_PATH / "features_combined_standardized.parquet")
 
+# # check in on our sentiment feature
+# print(df_feats.nsmallest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
+# print(df_feats.nlargest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
+
+# set a num_sents filter
+print(f"Total rows before filtering: {len(df_feats)}")
+threshold = 2
+df_feats = df_feats[df_feats["num_sents"] >= threshold]
+print(f"Filtered out articles with fewer than {threshold} sentences.")
+
 # stats
 print(f"Total rows: {len(df_feats)}")
 print(df_feats.columns)
 print(df_feats.describe())
 
-print(df.nsmallest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
-print(df.nlargest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
+df_feats.head()
+# %%
 
 # %%
 df = df_feats.merge(df_meta, on="article_id", how="left")
@@ -48,14 +58,20 @@ df = df_feats.merge(df_meta, on="article_id", how="left")
 
 # %%
 # defining features 
-features = ['nominal_verb_ratio', 'msttr', 'noun_ttr', 'verb_ttr', 
-            'personal_pronoun_ratio', 'function_word_ratio', 'of_ratio', 
-            'that_ratio', 'past_tense_ratio', #'present_tense_ratio', 
-            'passive_ratio', 'adjective_adverb_ratio', #'wordcount', 
-            'avg_wordlen', 'avg_sentlen', 
-            #'num_sents', 
-            'avg_ndd', 'std_ndd', 
-            'avg_mdd', 'std_mdd'] #, 'compression_ratio'] #, 'german_prob']
+features = ['nominal_verb_ratio',
+       'personal_pronoun_ratio', 'function_word_ratio', 'of_ratio',
+       'that_ratio', 
+       'present_tense_ratio',
+       'passive_ratio', 'adjective_adverb_ratio', 
+       'avg_wordlen', 'avg_sentlen',
+       'lix', 'rix', 
+       'mtld', 'cttr', 'noun_ttr', 'verb_ttr',
+       #'n_tokens_for_diversity',
+       'avg_ndd', 'std_ndd', 'avg_mdd', 'std_mdd', 
+       'compressrat',
+       'german_probability', 'german_sentence_share',
+       'semantic_sentiment_standardized'
+       ]
 
 # Defining palette for categories
 palette = sns.color_palette("hsv_r", n_colors=4)
@@ -67,16 +83,16 @@ palette_list[2] = (0.5, 0.9, 0.7)  # light green
 
 # %%
 # histogram over time colored by category
-merged['dt'] = pd.to_datetime(merged['date'], errors='coerce')
-merged['date_ordinal'] = merged['dt'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
-merged['year'] = merged['dt'].dt.year
-merged['category'] = [x.split(' ')[0] for x in merged['predicted_category']] # take first word as category
+df['dt'] = pd.to_datetime(df['date'], errors='coerce')
+df['date_ordinal'] = df['dt'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
+df['year'] = df['dt'].dt.year
+df['category'] = [x.split(' ')[0] for x in df['predicted_category']] # take first word as category
 
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'height_ratios': [1, 3], 'hspace': 0.2}, dpi=500)
 sns.set_style("whitegrid")
 
 # ---- TOP: total volume per year ----
-sns.histplot(data=merged, x='year', discrete=True, color="grey", ax=ax1, kde=True, alpha=0.6)
+sns.histplot(data=df, x='year', discrete=True, color="grey", ax=ax1, kde=True, alpha=0.6)
 ax1.set_ylabel("Total Articles")
 # change ytick label number to 5k if 5,000
 labels1 = [item.get_text() for item in ax1.get_yticklabels()]
@@ -84,14 +100,14 @@ labels1[1] = ['5k' if labels1[1] == '5000' else labels1[1]][0]
 ax1.set_yticklabels(labels1)
 
 # ---- BOTTOM: proportional stacked histogram ----
-sns.histplot(data=merged, x='year', hue='category', multiple='fill', discrete=True, legend=True, ax=ax2,palette=palette_list, alpha=0.8)
+sns.histplot(data=df, x='year', hue='category', multiple='fill', discrete=True, legend=True, ax=ax2,palette=palette_list, alpha=0.8)
 ax2.set_ylabel("Proportion")
 ax2.set_xlabel("Year")
 sns.move_legend(ax2,"upper right",  bbox_to_anchor=(.92, .6), frameon=False, title="Category",ncol=4)
 plt.tight_layout()
 plt.show()
 
-merged['category'].value_counts()
+df['category'].value_counts()
 
 # %%
 
@@ -102,12 +118,12 @@ from sklearn.preprocessing import MinMaxScaler
 scaler = MinMaxScaler()
 
 for feat in features:
-    merged[feat + '_norm'] = scaler.fit_transform(merged[[feat]].fillna(0))
+    df[feat + '_norm'] = scaler.fit_transform(df[[feat]].fillna(0))
     norm_feats.append(feat + '_norm')
 
 plt.figure(figsize=(12, 6))
 for feat in norm_feats:
-    year_std = merged.groupby('year')[feat].std().reset_index()
+    year_std = df.groupby('year')[feat].std().reset_index()
     sns.lineplot(data=year_std, x='year', y=feat, label=feat.replace('_norm', ''))
 plt.title('Standard Deviation of Normalized Features Over Time')
 plt.xlabel('Year')
@@ -119,7 +135,7 @@ plt.show()
 # do correlation of feature std with year
 corr_dict = {}
 for feat in norm_feats:
-    year_std = merged.groupby('year')[feat].std().reset_index()
+    year_std = df.groupby('year')[feat].std().reset_index()
     stat, p_value = spearmanr(year_std['year'], year_std[feat])
     start_end_diff = year_std[feat].iloc[-1] - year_std[feat].iloc[0]
     range_feat = (round(year_std[feat].min(),2), round(year_std[feat].max(),2))
@@ -130,9 +146,9 @@ df_corr.head(20)
 
 # %%
 # same thing, but per genre instead of overall
-for category in merged['predicted_category'].unique():
+for category in df['predicted_category'].unique():
     plt.figure(figsize=(12, 6))
-    cat_data = merged[merged['predicted_category'] == category]
+    cat_data = df[df['predicted_category'] == category]
     for feat in norm_feats:
         year_std = cat_data.groupby('year')[feat].std().reset_index()
         sns.lineplot(data=year_std, x='year', y=feat, label=feat.replace('_norm', ''))
@@ -144,8 +160,8 @@ for category in merged['predicted_category'].unique():
     plt.show()
 
 corr_dict_cat = {}
-for category in merged['predicted_category'].unique():
-    cat_data = merged[merged['predicted_category'] == category]
+for category in df['predicted_category'].unique():
+    cat_data = df[df['predicted_category'] == category]
     for feat in norm_feats:
         year_std = cat_data.groupby('year')[feat].std().reset_index()
         stat, p_value = spearmanr(year_std['year'], year_std[feat])
@@ -248,19 +264,19 @@ def corr_with_date(data, measure):
         stat_cat, p_value_cat = spearmanr(stats_df_cat['date_ordinal'], stats_df_cat[measure])
         print(f"  Rho btw {measure} vs date for category {category}: {stat_cat:.4f} (p-value: {p_value_cat:.4e})")
     print("\n")
-    scatter_per_group(merged, 'date_ordinal', measure, 'predicted_category')
+    scatter_per_group(df, 'date_ordinal', measure, 'predicted_category')
     return measure
 
 # for feat in ['avg_wordlen', 'avg_sentlen']:
-#     corr_with_date(merged, feat)
+#     corr_with_date(df, feat)
 
-plot_features_side_by_side(merged, 'date_ordinal', ['avg_wordlen', 'avg_sentlen'], 'predicted_category', palette_list)
+plot_features_side_by_side(df, 'date_ordinal', ['avg_wordlen', 'avg_sentlen'], 'predicted_category', palette_list)
 
 # %%
 # print top 10 correlation of all features with date for all categories
-categories = merged['predicted_category'].unique()
+categories = df['predicted_category'].unique()
 for category in categories:
-    dat = merged.loc[merged['predicted_category'] == category]
+    dat = df.loc[df['predicted_category'] == category]
     print(f"\n Category: {category}, n={len(dat)} ")
     results = []
     for col in features:
@@ -287,7 +303,7 @@ for i, r in top_german.head(10).iterrows():
 from sklearn.model_selection import cross_val_score
 selected_features = features
 
-linreg_df = merged.copy()
+linreg_df = df.copy()
 # standardize features
 from sklearn.preprocessing import StandardScaler
 scaler = StandardScaler()
@@ -296,7 +312,7 @@ linreg_df[selected_features] = scaler.fit_transform(linreg_df[selected_features]
 
 # %%
 
-print(f"\nAll categories together, n={len(merged)}")
+print(f"\nAll categories together, n={len(df)}")
 
 X = linreg_df[selected_features].fillna(0)
 y = linreg_df['date_ordinal'].fillna(0)
@@ -430,7 +446,7 @@ for cat in linreg_df['predicted_category'].unique():
 # %%
 # plot newspapers and categories over time
 plt.figure(figsize=(12, 6))
-sns.histplot(data=merged, x='date', hue='newspaper', multiple='fill', discrete=True, palette='tab10', alpha=0.8)
+sns.histplot(data=df, x='date', hue='newspaper', multiple='fill', discrete=True, palette='tab10', alpha=0.8)
 plt.title('Article Count by Newspaper Over Time')
 plt.xlabel('Year')
 plt.ylabel('Article Count')
@@ -441,11 +457,11 @@ plt.show()
 
 # %%
 reducer = umap.UMAP(random_state=42)
-embedding = reducer.fit_transform(merged[features].fillna(0))
+embedding = reducer.fit_transform(df[features].fillna(0))
 print("features: ", features)
 
 plt.figure(figsize=(10, 8))
-sns.scatterplot(x=embedding[:, 0], y=embedding[:, 1], hue=merged['predicted_category'], alpha=0.5, palette=palette_list)
+sns.scatterplot(x=embedding[:, 0], y=embedding[:, 1], hue=df['predicted_category'], alpha=0.5, palette=palette_list)
 plt.title('UMAP Projection of Articles Colored by Predicted Category')
 plt.xlabel('UMAP Dimension 1')
 plt.ylabel('UMAP Dimension 2')
@@ -455,9 +471,9 @@ plt.show()
 # %%
 
 # plot internal heterogeneity of categories over time by looking at the standard deviation of features per year and category
-heterogeneity = merged.groupby(['year', 'predicted_category'])[features].std().reset_index()
+heterogeneity = df.groupby(['year', 'predicted_category'])[features].std().reset_index()
 # plot heterogeneity over time for top 3 categories
-top_categories = merged['predicted_category'].value_counts().head(3).index.tolist()
+top_categories = df['predicted_category'].value_counts().head(3).index.tolist()
 plt.figure(figsize=(12, 6))
 for category in top_categories:
     cat_data = heterogeneity[heterogeneity['predicted_category'] == category]
@@ -475,7 +491,7 @@ plt.show()
 # check any corr between wordcount and features
 measure = "wordcount"
 
-stats_df = merged[[measure] + [col for col in merged.columns if col not in ['id', 'text', 'predicted_category', 'article_id', 'date', 'year', measure]]].dropna().copy()
+stats_df = df[[measure] + [col for col in df.columns if col not in ['id', 'text', 'predicted_category', 'article_id', 'date', 'year', measure]]].dropna().copy()
 results = []
 for col in stats_df.columns:
     if col == measure:
