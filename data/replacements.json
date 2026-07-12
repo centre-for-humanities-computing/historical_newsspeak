@@ -1,6 +1,7 @@
 
 
-{
+{   
+    "2den": "anden",
     "J": "I",
     "aff": "I",
     "arkviis": "arkvis",
@@ -50,6 +51,7 @@
     "huuse": "huse",
     "huus": "hus",
     "Hiøring": "Hjørring",
+    "Hs. Maj. Kongen": "Hans Majestæt Kongen",
     "ihiel": "ihjæl",
     "Jkke": "Ikke",
     "Jblandt": "Iblandt",
@@ -74,7 +76,9 @@
     "Jsland": "Island",
     "Jved": "ved",
     "kand": "kan",
-    "kiøbmænd": "Købmænd",
+    "Kiøbmænd": "Købmænd",
+    "Kiøbmænds": "Købmænds",
+    "kiøbs": "købs",
     "Khvns.": "Københavns",
     "Kiøbenhavn": "København",
     "Kiøbenhavns": "Københavns",

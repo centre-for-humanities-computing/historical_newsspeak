@@ -1,10 +1,26 @@
-pandas>=2.0
-numpy>=1.24
-glob
-#spacy==3.7.2
-#dacy==2.7.8
-#da_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.6.0/da_core_news_sm-3.6.0-py3-none-any.whl
-tqdm>=4.65
-joblib>=1.3
-lexical-diversity>=0.0.7
-#git+https://github.com/lauritswl/SemanticProjection
+# Pinned dependency set for da_dacy_large_trf on NVIDIA B200 (Blackwell, sm_100)
+# Verified working: July 2026, UCloud (SDU eScience), Python 3.10, CUDA driver 13.2
+#
+# Install order matters — see setup_env.sh for the full sequence.
+# torch and the DaCy model wheel are installed separately (not via this file)
+# because they need custom index URLs / direct wheel URLs.
+
+# for setting up, run: 
+# cd /work/<your-folder>/historical_newsspeak
+# git clone <repo> .   # if starting fresh, or git pull if already cloned
+# bash setup_env.sh
+
+# after that, run_pipeline can be done: 
+# nohup python -u run_pipeline.py --batch-size 256 < /dev/null > run.log 2>&1 &
+# echo $! > pipeline.pid
+# disown
+# tail -f run.log
+
+spacy>=3.5.2,<3.6.0
+cupy-cuda12x<14        # cupy 14+ requires numpy>=2.0, incompatible with thinc 8.1.12
+numpy<2.0               # thinc 8.1.12 (spaCy 3.5.4's backend) needs numpy 1.x ABI
+pandas
+datasets
+tqdm
+pyarrow
+
