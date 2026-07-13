@@ -76,5 +76,21 @@ else:
         combined["semantic_sentiment_mean_raw"] - global_mean
     ) / global_std
 
+# Per-article dispersion: how much does sentiment vary sentence-to-sentence
+# WITHIN an article? Derived directly from the already-stored sum/sumsq/n —
+# no need to touch raw sentence-level scores again.
+# Var(X) = E[X^2] - (E[X])^2
+combined["semantic_sentiment_var_raw"] = (
+    combined["semantic_sentiment_sumsq"] / combined["semantic_sentiment_n"]
+) - (combined["semantic_sentiment_mean_raw"] ** 2)
+# guard against tiny negative float noise from floating-point subtraction
+combined["semantic_sentiment_var_raw"] = combined["semantic_sentiment_var_raw"].clip(lower=0)
+combined["semantic_sentiment_std_raw"] = np.sqrt(combined["semantic_sentiment_var_raw"])
+
+# Articles with only 1 sentence have exactly 0 variance by construction
+# (nothing to vary against) — not missing data, but not meaningful either.
+# Flag rather than silently mixing them in with genuine low-variance articles.
+combined["semantic_sentiment_std_defined"] = combined["semantic_sentiment_n"] >= 2
+
 combined.to_parquet(out_path, index=False)
 print(f"\nWrote {len(combined)} rows to {out_path}")
