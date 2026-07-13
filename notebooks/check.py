@@ -10,6 +10,12 @@ from scipy.stats import spearmanr
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
+from factor_analyzer import FactorAnalyzer
+from factor_analyzer.factor_analyzer import calculate_bartlett_sphericity, calculate_kmo
 
 import numpy as np
 from sklearn.metrics import mean_absolute_error
@@ -25,7 +31,13 @@ FIGS_PATH = CWD / "figs"
 
 ds = load_dataset("chcaa/eno-newspapers-enriched", split="train", streaming=True, 
                        columns=['id', 'date', 'newspaper', 'predicted_category','fiction_prob','non_fiction_prob','fictionality_tag'])
-df_meta = ds.to_pandas()
+df_meta = pd.DataFrame(list(ds))
+# add fiction to df_meta category based on fictionality_tag
+df_meta['predicted_category'] = df_meta.apply(lambda row: 'fiction' if row['fictionality_tag'] == 'fiction' else row['predicted_category'], axis=1)
+# remove anything with cat == paratext
+df_meta = df_meta[df_meta['predicted_category'] != 'Paratext']
+print(f"Total rows after merging and filtering: {len(df_meta)}")
+
 df_meta.head()
 
 # %%
@@ -50,44 +62,198 @@ df_feats.head()
 # %%
 
 # %%
+# rename id to article_id in df_meta to match df_feats
+df_meta = df_meta.rename(columns={"id": "article_id"})
 df = df_feats.merge(df_meta, on="article_id", how="left")
 
+# see how many have nan in date
+nan_date = df['date'].isna().sum()
+print(f"Number of rows with NaN in 'date': {nan_date} out of {len(df)} total rows.")
+df.head()
 # %%
 
-# START
+#### defining features ####
 
-
-# %%
-# defining features 
-features = ['nominal_verb_ratio',
-       'personal_pronoun_ratio', 'function_word_ratio', 'of_ratio',
-       'that_ratio', 
-       'present_tense_ratio',
-       'passive_ratio', 'adjective_adverb_ratio', 
-       'avg_wordlen', 'avg_sentlen',
-       'lix', 'rix', 
-       'mtld', 'cttr', 'noun_ttr', 'verb_ttr',
-       #'n_tokens_for_diversity',
-       'avg_ndd', 'std_ndd', 'avg_mdd', 'std_mdd', 
-       'compressrat',
-       'german_probability', 'german_sentence_share',
+features = [ 
+       'nominal_verb_ratio', 'of_ratio', 'that_ratio', # perplexity/information related
+       'present_tense_ratio','passive_ratio',              # register/style related
+       'adjective_adverb_ratio', 'personal_pronoun_ratio', # register/style related
+       'avg_wordlen', 'avg_sentlen', 'lix', 'rix',     # readability related
+       #'mtld', 
+       'cttr', 'noun_ttr', 'verb_ttr',         # lexical diversity
+       'avg_ndd', 'std_ndd', 'avg_mdd', 'std_mdd',     # dependency distance
+       #'compressrat', 
+       'function_word_ratio',
+       #'german_probability', 'german_sentence_share',
        'semantic_sentiment_standardized'
+      #'n_tokens_for_diversity',
        ]
 
-complexity_features = ['lix', 'rix', 'mtld', 'cttr', 'avg_ndd', 'avg_mdd', 'avg_wordlen', 'avg_sentlen']
-register_features = ['nominal_verb_ratio', 'personal_pronoun_ratio', 'function_word_ratio', 
-                      'passive_ratio', 'adjective_adverb_ratio', 'of_ratio', 'that_ratio']
 
-# Defining palette for categories
-palette = sns.color_palette("hsv_r", n_colors=4)
-# Convert to a list of RGB tuples
-palette_list = list(palette)
-# change second to light green
-palette_list[2] = (0.5, 0.9, 0.7)  # light green
+# normalize fetaures to space 0-1 for better visualization
+scaler = MinMaxScaler()
+
+norm_feats = []
+for feat in features:
+    df[feat + '_norm'] = scaler.fit_transform(df[[feat]].fillna(0))
+    norm_feats.append(feat + '_norm')
+
+# show nans per feature and set
+nancounts = {}
+for feat in features:
+    nancounts[feat] = df[feat].isna().sum()
+nan_df = pd.DataFrame.from_dict(nancounts, orient='index', columns=['nans'])
+nan_df.head(20)
+
+# Direct test: do features correlate with article length (tokens) / sentlen?
+corr_df = pd.DataFrame(columns=['feature', 'token_corr', 'sentlen_corr'])
+for feature in features:
+    slice = df[[feature, 'n_tokens_for_diversity']].dropna()
+    token_corr, _ = spearmanr(slice[feature], slice['n_tokens_for_diversity'])
+    slice = df[[feature, 'avg_sentlen']].dropna()
+    sentlen_corr, _ = spearmanr(slice[feature], slice['avg_sentlen'])
+    corr_df = pd.concat([corr_df, pd.DataFrame({'feature': [feature], 'token_corr': [token_corr], 'sentlen_corr': [sentlen_corr]})], ignore_index=True)
+corr_df['token_corr'] = corr_df['token_corr'].round(2)
+corr_df['sentlen_corr'] = corr_df['sentlen_corr'].round(2)
+corr_df['feature'] = corr_df['feature'].str.replace('_', ' ').str.title()
+corr_df.head(40)
+
+# Residualization
+import statsmodels.api as sm
+
+def residualize(y, length_var):
+    mask = y.notna() & length_var.notna()
+    X = sm.add_constant(np.log1p(length_var[mask]))
+    model = sm.OLS(y[mask], X).fit()
+    resid = pd.Series(index=y.index, dtype=float)
+    resid[mask] = model.resid
+    return resid, model.rsquared
+
+for col in ['cttr', 'noun_ttr', 'verb_ttr']:
+    df[col + '_resid'], r2 = residualize(df[col], df['n_tokens_for_diversity'])
+    print(f"{col}: length explains {r2:.1%} of variance")
+
+features = [f.replace('cttr','cttr_resid').replace('noun_ttr','noun_ttr_resid').replace('verb_ttr','verb_ttr_resid') for f in features]
+# %%
+
+# try clustering features by correlation
+corr = df[features].corr(method='spearman')
+sns.clustermap(corr, cmap='vlag', center=0, figsize=(10, 10), 
+                dendrogram_ratio=0.15, annot=False)
+plt.show()
+
+# %%
+
+
+X = StandardScaler().fit_transform(df[features].fillna(df[features].median()))
+pca = PCA() 
+pca.fit(X)
+print(pca.explained_variance_ratio_.cumsum())  # how many components needed for e.g. 80%?
+loadings = pd.DataFrame(pca.components_.T, index=features, columns=[f"PC{i+1}" for i in range(len(features))])
+print(loadings.iloc[:, :3])
+
+
+# %%
+#### Factor analysis ####
+
+X = df[features].dropna() 
+print(f"Factor analysis on {len(X)} rows with {len(features)} features.")
+
+# Check factorability first
+chi_sq, p = calculate_bartlett_sphericity(X)
+kmo_all, kmo_model = calculate_kmo(X)
+print(f"Bartlett's p={p:.4f}, KMO={kmo_model:.3f}")  # KMO > 0.6 is usually considered adequate
+
+fa = FactorAnalyzer(n_factors=3, rotation='promax')
+fa.fit(X)
+loadings = pd.DataFrame(fa.loadings_, index=features, columns=[f"F{i+1}" for i in range(3)])
+print(loadings.round(2))
+
+
+variance_df = pd.DataFrame(
+    fa.get_factor_variance(),
+    index=["SS Loadings", "Proportion Var", "Cumulative Var"],
+    columns=[f"F{i+1}" for i in range(3)]
+)
+print(variance_df)
+
+# %%
+
+uniquenesses = pd.Series(fa.get_uniquenesses(), index=features)
+print(uniquenesses.sort_values().head(10))
+
+df[['personal_pronoun_ratio', 'adjective_adverb_ratio', 'that_ratio']].corr()
+
+# %%
+def parallel_analysis(X, n_iter=50):
+    n_obs, n_vars = X.shape
+    real_ev, _ = fa.get_eigenvalues()
+    random_evs = np.zeros((n_iter, n_vars))
+    for i in range(n_iter):
+        random_data = np.random.normal(size=(n_obs, n_vars))
+        fa_random = FactorAnalyzer(n_factors=n_vars, rotation=None)
+        fa_random.fit(random_data)
+        random_evs[i], _ = fa_random.get_eigenvalues()
+    return real_ev, random_evs.mean(axis=0)
+
+real_ev, random_ev = parallel_analysis(X)
+
+plt.figure(figsize=(7,5))
+plt.plot(range(1, len(real_ev)+1), real_ev, marker='o', label='Actual data')
+plt.plot(range(1, len(random_ev)+1), random_ev, marker='o', linestyle='--', label='Random data (mean)')
+plt.axhline(1, color='grey', linestyle=':', alpha=0.5)
+plt.xlabel("Factor number")
+plt.ylabel("Eigenvalue")
+plt.legend()
+plt.title("Parallel Analysis")
+plt.tight_layout()
+plt.show()
+
+# %%
+
+dominant_factor = loadings.abs().idxmax(axis=1)
+sort_order = loadings.loc[dominant_factor.sort_values().index]
+
+plt.figure(figsize=(5, 8))
+display = sort_order.copy()
+display[display.abs() < 0.3] = 0
+sns.heatmap(display, cmap='vlag', center=0, annot=True, fmt='.2f', cbar=False)
+plt.title("Rotated Loadings (grouped by dominant factor)")
+plt.tight_layout()
+plt.show()
+
+# %%
+communalities = 1 - pd.Series(fa.get_uniquenesses(), index=features)
+communalities.sort_values().plot(kind='barh', figsize=(6,8))
+plt.xlabel("Communality (variance explained by 3 factors)")
+plt.tight_layout()
+plt.show()
+
+# %%
+print(df[['of_ratio', 'nominal_verb_ratio']].describe())
+print("of_ratio == 0:", (df['of_ratio'] == 0).mean())
+print("nominal_verb_ratio == 0:", (df['nominal_verb_ratio'] == 0).mean())
+
+# Do these two even correlate with EACH OTHER? If they're jointly measuring
+# "nominality," they should — if they don't, that undermines treating them
+# as one shared construct.
+print(df[['of_ratio', 'nominal_verb_ratio']].corr())
+
+
 
 
 # %%
 # histogram over time colored by category
+
+# Defining palette for categories
+palette = sns.color_palette("hsv_r", n_colors=5)
+# Convert to a list of RGB tuples
+palette_list = list(palette)
+# change second to light green
+palette_list[2] = (0.5, 0.9, 0.7)  # light green
+# change 4th to light purple
+palette_list[3] = (0.7, 0.5, 0.9)  # light purple
+
 df['dt'] = pd.to_datetime(df['date'], errors='coerce')
 df['date_ordinal'] = df['dt'].apply(lambda x: x.toordinal() if pd.notnull(x) else None)
 df['year'] = df['dt'].dt.year
@@ -115,16 +281,6 @@ plt.show()
 df['category'].value_counts()
 
 # %%
-
-# check whether std increases over time per feature
-norm_feats = []
-# normalize fetaures to space 0-1 for better visualization
-from sklearn.preprocessing import MinMaxScaler
-scaler = MinMaxScaler()
-
-for feat in features:
-    df[feat + '_norm'] = scaler.fit_transform(df[[feat]].fillna(0))
-    norm_feats.append(feat + '_norm')
 
 plt.figure(figsize=(12, 6))
 for feat in norm_feats:
