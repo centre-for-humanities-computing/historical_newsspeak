@@ -92,5 +92,35 @@ combined["semantic_sentiment_std_raw"] = np.sqrt(combined["semantic_sentiment_va
 # Flag rather than silently mixing them in with genuine low-variance articles.
 combined["semantic_sentiment_std_defined"] = combined["semantic_sentiment_n"] >= 2
 
+# Rigorous "standardized" variance, matching the mean's treatment in spirit
+# but using the statistically correct transform for a variance quantity.
+# Variances are ratio-scale (always positive, right-skewed) — unlike the
+# mean, simple subtraction/z-scoring isn't appropriate. Instead: compare
+# each article's variance to the pooled corpus-wide sentence-level variance
+# via a RATIO, then log-transform (same logic behind an F-test comparing
+# group variances). log_ratio ≈ 0 means "as variable as the corpus average";
+# positive means more variable within this article than typical; negative
+# means less variable (more tonally consistent) than typical.
+#
+# Undefined (NaN) when var_raw == 0 — covers both single-sentence articles
+# (n=1, trivially zero, flagged separately via std_defined) and the rare
+# genuine case of identical scores across multiple sentences; log(0) is
+# undefined either way, and "zero variance" isn't meaningfully comparable
+# on a ratio scale.
+#
+# Caveat: articles with few sentences have noisier variance ESTIMATES
+# (sampling variability of a sample variance shrinks with n) — this
+# standardization doesn't correct for that; treat log_var_ratio for very
+# low semantic_sentiment_n articles with appropriate caution.
+if global_var > 0:
+    combined["semantic_sentiment_var_ratio"] = combined["semantic_sentiment_var_raw"] / global_var
+    with np.errstate(divide="ignore"):
+        combined["semantic_sentiment_log_var_ratio"] = np.log(combined["semantic_sentiment_var_ratio"])
+    combined.loc[combined["semantic_sentiment_var_raw"] == 0, "semantic_sentiment_log_var_ratio"] = np.nan
+else:
+    print("WARNING: global_var is 0 — cannot compute variance ratio.")
+    combined["semantic_sentiment_var_ratio"] = np.nan
+    combined["semantic_sentiment_log_var_ratio"] = np.nan
+
 combined.to_parquet(out_path, index=False)
 print(f"\nWrote {len(combined)} rows to {out_path}")
