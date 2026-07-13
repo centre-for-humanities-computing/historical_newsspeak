@@ -59,7 +59,6 @@ print(df_feats.columns)
 print(df_feats.describe())
 
 df_feats.head()
-# %%
 
 # %%
 # rename id to article_id in df_meta to match df_feats
@@ -70,18 +69,37 @@ df = df_feats.merge(df_meta, on="article_id", how="left")
 nan_date = df['date'].isna().sum()
 print(f"Number of rows with NaN in 'date': {nan_date} out of {len(df)} total rows.")
 df.head()
+
 # %%
 
+nominal = pd.read_parquet(DATA_PATH / "nominal_verb_ratio_fixed.parquet")
+print(f"Total rows in nominal_verb_ratio dataset: {len(nominal)}")
+nominal.head()
+
+# merge w df
+df = df.merge(nominal, on="article_id", how="left")
+# see nans in nominal_verb_ratio_fixed
+nan_nominal = df['nominal_verb_ratio'].isna().sum()
+print(f"Number of rows with NaN in 'nominal_verb_ratio': {nan_nominal} out of {len(df)} total rows.")
+# remove old nominal_verb_ratio column if it exists
+df = df.drop(columns=['nominal_verb_ratio'], errors='ignore')
+# rename nominal_verb_ratio_fixed to nominal_verb_ratio
+df = df.rename(columns={"nominal_verb_ratio_fixed": "nominal_verb_ratio"})
+
+df.head()
+# %%
 #### defining features ####
 
 features = [ 
-       'nominal_verb_ratio', 'of_ratio', 'that_ratio', # perplexity/information related
+       'nominal_verb_ratio', 
+       'of_ratio', 'that_ratio', # perplexity/information related
        'present_tense_ratio','passive_ratio',              # register/style related
        'adjective_adverb_ratio', 'personal_pronoun_ratio', # register/style related
-       'avg_wordlen', 'avg_sentlen', 'lix', 'rix',     # readability related
+       'avg_wordlen', 'avg_sentlen', 
+       'lix', #'rix',     # readability related
        #'mtld', 
        'cttr', 'noun_ttr', 'verb_ttr',         # lexical diversity
-       'avg_ndd', 'std_ndd', 'avg_mdd', 'std_mdd',     # dependency distance
+       'avg_ndd', 'std_ndd', #'avg_mdd', 'std_mdd',     # dependency distance
        #'compressrat', 
        'function_word_ratio',
        #'german_probability', 'german_sentence_share',
@@ -156,6 +174,8 @@ print(loadings.iloc[:, :3])
 # %%
 #### Factor analysis ####
 
+n_factors = 6
+
 X = df[features].dropna() 
 print(f"Factor analysis on {len(X)} rows with {len(features)} features.")
 
@@ -164,16 +184,16 @@ chi_sq, p = calculate_bartlett_sphericity(X)
 kmo_all, kmo_model = calculate_kmo(X)
 print(f"Bartlett's p={p:.4f}, KMO={kmo_model:.3f}")  # KMO > 0.6 is usually considered adequate
 
-fa = FactorAnalyzer(n_factors=3, rotation='promax')
+fa = FactorAnalyzer(n_factors=n_factors, rotation='promax')
 fa.fit(X)
-loadings = pd.DataFrame(fa.loadings_, index=features, columns=[f"F{i+1}" for i in range(3)])
+loadings = pd.DataFrame(fa.loadings_, index=features, columns=[f"F{i+1}" for i in range(n_factors)])
 print(loadings.round(2))
 
 
 variance_df = pd.DataFrame(
     fa.get_factor_variance(),
     index=["SS Loadings", "Proportion Var", "Cumulative Var"],
-    columns=[f"F{i+1}" for i in range(3)]
+    columns=[f"F{i+1}" for i in range(n_factors)]
 )
 print(variance_df)
 
@@ -182,7 +202,6 @@ print(variance_df)
 uniquenesses = pd.Series(fa.get_uniquenesses(), index=features)
 print(uniquenesses.sort_values().head(10))
 
-df[['personal_pronoun_ratio', 'adjective_adverb_ratio', 'that_ratio']].corr()
 
 # %%
 def parallel_analysis(X, n_iter=50):
@@ -216,7 +235,7 @@ sort_order = loadings.loc[dominant_factor.sort_values().index]
 
 plt.figure(figsize=(5, 8))
 display = sort_order.copy()
-display[display.abs() < 0.3] = 0
+display[display.abs() < 0.1] = 0
 sns.heatmap(display, cmap='vlag', center=0, annot=True, fmt='.2f', cbar=False)
 plt.title("Rotated Loadings (grouped by dominant factor)")
 plt.tight_layout()
@@ -225,23 +244,37 @@ plt.show()
 # %%
 communalities = 1 - pd.Series(fa.get_uniquenesses(), index=features)
 communalities.sort_values().plot(kind='barh', figsize=(6,8))
-plt.xlabel("Communality (variance explained by 3 factors)")
+plt.xlabel(f"Communality (variance explained by {n_factors} factors)")
 plt.tight_layout()
 plt.show()
 
 # %%
-print(df[['of_ratio', 'nominal_verb_ratio']].describe())
-print("of_ratio == 0:", (df['of_ratio'] == 0).mean())
-print("nominal_verb_ratio == 0:", (df['nominal_verb_ratio'] == 0).mean())
 
-# Do these two even correlate with EACH OTHER? If they're jointly measuring
-# "nominality," they should — if they don't, that undermines treating them
-# as one shared construct.
-print(df[['of_ratio', 'nominal_verb_ratio']].corr())
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import statsmodels.api as sm
+
+cluster_vars = ['avg_sentlen', 'lix', 'rix', 'avg_mdd', 'std_mdd', 'avg_ndd', 'std_ndd']
+X_vif = df[cluster_vars].dropna()
+X_vif_const = sm.add_constant(X_vif)
+
+vif_data = pd.DataFrame()
+vif_data["feature"] = X_vif_const.columns
+vif_data["VIF"] = [variance_inflation_factor(X_vif_const.values, i) for i in range(X_vif_const.shape[1])]
+print(vif_data)
+
+# %%
+print(df[['avg_mdd', 'avg_ndd', 'std_mdd', 'std_ndd']].corr())
 
 
 
 
+
+
+
+
+
+
+# %%
 # %%
 # histogram over time colored by category
 
