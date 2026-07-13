@@ -14,6 +14,9 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import statsmodels.api as sm
+
 from factor_analyzer import FactorAnalyzer
 from factor_analyzer.factor_analyzer import calculate_bartlett_sphericity, calculate_kmo
 
@@ -41,17 +44,15 @@ print(f"Total rows after merging and filtering: {len(df_meta)}")
 df_meta.head()
 
 # %%
-df_feats = pd.read_parquet(DATA_PATH / "features_combined_standardized.parquet")
-
-# # check in on our sentiment feature
-# print(df_feats.nsmallest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
-# print(df_feats.nlargest(10, "semantic_sentiment_standardized")[["article_id", "num_sents", "semantic_sentiment_standardized"]])
+df_feats = pd.read_parquet(DATA_PATH / "features_combined_standardized_13-07-26.parquet")
 
 # set a num_sents filter
 print(f"Total rows before filtering: {len(df_feats)}")
 threshold = 2
 df_feats = df_feats[df_feats["num_sents"] >= threshold]
 print(f"Filtered out articles with fewer than {threshold} sentences.")
+# print n False in sentiment SD defined col
+print(f"Number of articles with False in 'sentiment_sd_defined': {df_feats['semantic_sentiment_std_defined'].value_counts().get(False, 0)}")
 
 # stats
 print(f"Total rows: {len(df_feats)}")
@@ -250,17 +251,14 @@ plt.show()
 
 # %%
 
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-import statsmodels.api as sm
 
-cluster_vars = ['avg_sentlen', 'lix', 'rix', 'avg_mdd', 'std_mdd', 'avg_ndd', 'std_ndd']
-X_vif = df[cluster_vars].dropna()
-X_vif_const = sm.add_constant(X_vif)
+X_vif_full = df[features].dropna()
+X_vif_full_const = sm.add_constant(X_vif_full)
 
-vif_data = pd.DataFrame()
-vif_data["feature"] = X_vif_const.columns
-vif_data["VIF"] = [variance_inflation_factor(X_vif_const.values, i) for i in range(X_vif_const.shape[1])]
-print(vif_data)
+vif_full = pd.DataFrame()
+vif_full["feature"] = X_vif_full_const.columns
+vif_full["VIF"] = [variance_inflation_factor(X_vif_full_const.values, i) for i in range(X_vif_full_const.shape[1])]
+print(vif_full.sort_values("VIF", ascending=False))
 
 # %%
 print(df[['avg_mdd', 'avg_ndd', 'std_mdd', 'std_ndd']].corr())
