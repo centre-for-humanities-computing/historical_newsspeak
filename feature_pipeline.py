@@ -164,7 +164,7 @@ def get_pos_derived_features(df):
     verbs = d[pos == "VERB"]
     adjectives = d[pos == "ADJ"]
     adverbs = d[pos == "ADV"]
-    nominals = d[pos.isin(["PROPN", "ADJ"])]
+    nominals = d[pos.isin(["PROPN", "ADJ", "NOUN"])]
     function_words = d[pos.isin(["ADP", "CCONJ", "SCONJ", "AUX", "PART"])]
     personal_pronouns = d[(pos == "PRON") & morph.str.contains("PronType=Prs")]
     of_like = d[(pos == "ADP") & d["token_text"].str.lower().eq("af")]
@@ -181,7 +181,7 @@ def get_pos_derived_features(df):
     total_nominals = len(nominals)
 
     return {
-        "nominal_verb_ratio": total_nominals / total_verbs if total_verbs else np.nan,
+        "nominal_verb_ratio": total_nominals / (total_nominals + total_verbs) if (total_nominals + total_verbs) else np.nan,
         "noun_ttr": nouns["lemma"].str.lower().nunique() / len(nouns) if len(nouns) else np.nan,
         "verb_ttr": verbs["lemma"].str.lower().nunique() / total_verbs if total_verbs else np.nan,
         "personal_pronoun_ratio": len(personal_pronouns) / total_words,

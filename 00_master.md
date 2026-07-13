@@ -28,3 +28,6 @@ Okay, so what we could do is:
 - Consider adding:
   - Recurrence Quantification (RQ) analysis
   - Novelty detection (e.g., using stylistics vectors)
+
+# July 13
+- computed nominal ratio wrongly, corrected now.
