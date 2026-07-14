@@ -1,0 +1,16 @@
+# Requirements for notebooks/main.py (the analysis stage).
+# This is intentionally separate from the pipeline-stage requirements
+# (run_pipeline.py, feature_pipeline.py) -- main.py only needs stats/ML
+# libraries, not spaCy/DaCy or the GPU sentiment model, so it can run
+# in a much lighter environment.
+
+pandas
+numpy
+pyarrow          # parquet I/O
+matplotlib
+seaborn
+scipy            # spearmanr, pearsonr
+scikit-learn     # PCA, StandardScaler, MinMaxScaler
+statsmodels      # mixedlm, VIF, LOWESS
+factor-analyzer  # FactorAnalyzer, calculate_bartlett_sphericity, calculate_kmo
+ruptures         # changepoint detection

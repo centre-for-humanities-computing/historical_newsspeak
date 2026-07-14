@@ -1,3 +1,6 @@
 data_all/
 data/
-notebooks/
+notebooks/novelty.py
+notebooks/POS_tagging.py
+notebooks/text.txt
+00_master.md
