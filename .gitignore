@@ -3,4 +3,11 @@ data/
 notebooks/novelty.py
 notebooks/POS_tagging.py
 notebooks/text.txt
+notebooks/nonlinear_dynamics.py
+
 00_master.md
+methods_checkpoint.md
+
+# easily reproducible
+src/eno
+figs/

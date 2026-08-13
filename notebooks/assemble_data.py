@@ -1,3 +1,5 @@
+# %%
+# 
 import pandas as pd
 from datasets import load_dataset
 import numpy as np
@@ -155,3 +157,11 @@ for col in ['cttr', 'noun_ttr', 'verb_ttr']:
 df.to_parquet(DATA_PATH / "usage_features_13-07-26_with_nominal.parquet", index=False)
 print(f"Saved {len(df)} rows to usage_features_13-07-26_with_nominal.parquet")
 
+# %%
+
+from huggingface_hub import list_repo_files
+files = [f for f in list_repo_files(REPO, repo_type="dataset")
+         if f.endswith(".parquet")]
+for f in sorted(files):
+    print(f)
+# %%
