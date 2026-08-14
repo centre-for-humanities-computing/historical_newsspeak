@@ -239,7 +239,7 @@ for ax in axes[1:]:
     ax.set_yticklabels([])
 axes[0].text(actual["fiction"][0] - 0.05, len(order) - .04, " Fiction",
              color="#055f11", fontsize=8, va="top")
-fig.supxlabel(f"Tucker's congruence at $n={fiction_n:,}$".replace(",", "{,}"),
+fig.supxlabel(f"Tucker's congruence".replace(",", "{,}"),
               fontsize=9)
 plt.tight_layout()
 plt.savefig(FIGS_PATH / "fa_subsample_null.pdf", bbox_inches="tight", dpi=300)

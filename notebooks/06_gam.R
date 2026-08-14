@@ -181,6 +181,46 @@ p <- slopes |>
 ggsave(file.path(FIGS, "gam_within_title_slopes.pdf"), p, width = 8, height = 3.5)
 
 
+# --- EXAMINE SDs ----
+
+
+disp <- d |>
+  group_by(category, year) |>
+  summarise(across(all_of(REPRESENTATIVE), sd), n = n(), .groups = "drop") |>
+  filter(n >= 100)
+disp
+
+disp_long <- disp |>
+  pivot_longer(all_of(REPRESENTATIVE), names_to = "feature", values_to = "sd") |>
+  group_by(feature) |>
+  mutate(sd_z = sd / mean(sd)) |>          # relative to that feature's mean SD
+  ungroup()
+
+# The test: does National's dispersion rise between the drift windows while
+# International's does not?
+disp_long |>
+  filter(year >= 1760, year <= 1829) |>
+  mutate(win = ifelse(year <= 1789, "1760-89", "1800-29")) |>
+  filter(win == "1760-89" | year >= 1800) |>
+  group_by(category, feature, win) |>
+  summarise(m = mean(sd_z), .groups = "drop") |>
+  pivot_wider(names_from = win, values_from = m) |>
+  mutate(change = `1800-29` / `1760-89` - 1) |>
+  select(feature, category, change) |>
+  pivot_wider(names_from = category, values_from = change) |>
+  as.data.frame() |> print(digits = 2)
+
+disp_long |>
+  ggplot(aes(year, sd_z, colour = category)) +
+  geom_line(linewidth = .2) +
+  geom_smooth(se = FALSE, linewidth = .7, method = "loess", span = .4) +
+  facet_wrap(~ feature, scales = "free_y") +
+  scale_colour_manual(values = PAL) +
+  labs(y = "Within-genre SD, relative to feature mean", x = NULL) +
+  theme_minimal(base_size = 8)
+ggsave(file.path(FIGS, "gam_within_genre_dispersion.pdf"), width = 7, height = 5)
+
+
 # --- 4. DIAGNOSTICS ----------------------------------------------------------
 # k.check compares fitted residuals against what a larger basis would capture.
 # Read the two columns together: a low k-index WITH edf near k' means the basis
