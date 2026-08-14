@@ -9,21 +9,34 @@ Accompanying poster: *"Language in Expansion: Genre and Diachronic Variation in 
 
 ```
 src/                      Data pipeline (tokenization -> features -> sentiment)
+|-- config.py           Config file for paths, constants, and feature definitions (Python)
+|-- config.R           Config file for paths, constants, and feature definitions (R)
 |-- run_pipeline.py            spaCy/DaCy tokenization, POS, dependency parsing
 |-- feature_pipeline.py        Per-article stylistic features + semantic sentiment
 |-- finalize_sentiment.py      Corpus-wide sentiment standardization
 |-- recompute_nominal_verb_ratio.py   Fix for a nominality-measure bug (see Known Issues)
 `-- factor_sweep.py             Systematic factor-count sweep utility (imported by notebooks/main.py)
 
-notebooks/
-`-- main.py                Main analysis script: loads processed features, and runs
-                            (inline, not separate modules) --
-                            PCA, VIF, factor analysis, genre-invariance checks
-                            (leave-one-out congruence + subsampling robustness test),
-                            correlation-with-time tables, changepoint detection,
-                            mixed-effects models, and effect-size translation
-                            (SD-relative slopes, rho^2). Produces all
-                            tables/figures used in the paper/poster.
+notebooks/                Analysis pipeline, run in order
+|-- 01_prep_data.py            Loads processed features, applies cleaning and
+                                length residualisation (TTRs ~ log tokens,
+                                within-article SDs ~ sentence count)
+|-- 02_fa.py                    Factor analysis: VIF, factorability (KMO,
+                                Bartlett), factor-count sweep, promax solution,
+                                and genre-invariance checks (leave-one-out
+                                Tucker congruence + subsampling null)
+|-- 03_coherence.py             Genre separability: multinomial logistic and
+                                gradient-boosted classifiers under grouped CV,
+                                rolling 30-year windows, coefficient profiles
+                                (drift, cosine similarity, ||beta||)
+|-- 05_correlations.py          Spearman correlations between features and
+                                publication year, per genre
+|-- 06_export_for_GAM.py        Writes the modelling frame for R
+|-- 06_gam.R                    GAMMs per indicator and genre (bam, factor
+                                smooth by newspaper); trajectories, first
+                                derivatives, periods of supported change
+`-- 06b_sensitivity_check.R     Refits across k in {8,12,16} and gamma in
+                                {1,1.5,2}; agreement across configurations
 
 setup_env.sh               Python 3.10 env for src/run_pipeline.py (spaCy/DaCy)
 setup_env_features.sh      Python 3.12 env for src/feature_pipeline.py (GPU sentiment)

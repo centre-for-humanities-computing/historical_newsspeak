@@ -374,7 +374,7 @@ print("\nlowest-pwa newspapers:\n", papers.pwa.nsmallest(5).round(4).to_string()
 
 df["year"] = df["dt"].dt.year
 
-colors = {"National": "#1f77b4", "International": "#ff7f0e", "Advertisement": "#2ca02c", "fiction": "#d62728"}
+colors = CATEGORY_COLORS.copy()
 
 fig, ax = plt.subplots(figsize=(7, 3), dpi=300)
 for c, g in df.groupby("category", observed=True):
@@ -415,12 +415,13 @@ plt.show()
 # --- 9. figure: article volume over time (fig:dists) ----------------------
 
 sns.set_style("whitegrid")
-palette = list(sns.color_palette("hsv_r", n_colors=5))
-palette[1] = palette[4] #(0.3, 0.9, 0.6)
-# make 3 slightly lighter
-palette[2] = (0.6, 1.0, 0.9415415212269964)
-# make the last a bit darker for better visibility in the legend
-palette[-2] = (0.05, 1.0, 1.3125013126960572e-06)
+palette = list(sns.color_palette("hsv_r", n_colors=4))
+palette[-1] = "#00c853"
+palette[0] = "#ff0090"
+palette[1] = "#ffb066"
+palette[2] = "#b98cff"
+
+cat_colors = CATEGORY_COLORS.copy()
 
 fig, (ax1, ax2) = plt.subplots(
     2, 1, figsize=(8, 4), sharex=True,
@@ -438,6 +439,5 @@ sns.move_legend(ax2, "upper right", bbox_to_anchor=(.92, .3), frameon=False, nco
 plt.tight_layout()
 plt.savefig(FIGS_PATH / "article_volume_over_time.pdf", dpi=500)
 plt.show()
-
 
 # %%

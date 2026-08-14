@@ -1,5 +1,7 @@
 # historical_newsspeak pipeline
 
+SRC contains some helper functions for the analysis (`factor_sweep.py` and config files `config.py` / `config.R`), but MAINLY the feature extraction pipeline, which is run from the command line. The pipeline is:
+
 Danish historical newspaper OCR → spaCy/DaCy tokenization → stylistic
 feature extraction → sentiment standardization.
 
@@ -9,7 +11,7 @@ separate Python venvs** — see below for why.
 ## Pipeline overview
 
 ```
-raw text (chcaa/eno-newspapers-enriched)
+raw text (newspapers)
         │
         ▼
 run_pipeline.py            (.venv, Python 3.10)

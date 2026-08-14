@@ -31,7 +31,7 @@ from factor_analyzer.factor_analyzer import (calculate_bartlett_sphericity,
 
 sys.path.append(str(Path.cwd().parent / "src"))
 from factor_sweep import run_factor_sweep
-from config import DATA_PATH, FIGS_PATH, FEATURES, FA_FEATURES, CATEGORIES, DATA_FILE, DISPLAY_NAMES
+from config import DATA_PATH, FIGS_PATH, FEATURES, FA_FEATURES, CATEGORIES, DATA_FILE, DISPLAY_NAMES, CATEGORY_COLORS
 
 N_FACTORS = 3
 FACTOR_NAMES = [f"F{i+1}" for i in range(N_FACTORS)]
@@ -226,7 +226,7 @@ for fi, (ax, fname) in enumerate(zip(axes, FACTOR_NAMES)):
         v = nulls[genre][:, fi]
         ax.scatter(v, np.full_like(v, gi) + rng.uniform(-.14, .14, len(v)),
                    s=16, color="#555555", alpha=.4, lw=0, zorder=2)
-    ax.axvline(fic, color="#055f11", lw=1.8, zorder=3)
+    ax.axvline(fic, color=CATEGORY_COLORS["fiction"], lw=1.8, zorder=3)
     ax.set_title(fname, fontsize=10)
     ax.set_yticks(range(len(order)))
     ax.set_ylim(-.6, len(order) - .35)
@@ -237,7 +237,7 @@ for fi, (ax, fname) in enumerate(zip(axes, FACTOR_NAMES)):
 axes[0].set_yticklabels(order, fontsize=8)
 for ax in axes[1:]:
     ax.set_yticklabels([])
-axes[0].text(actual["fiction"][0], len(order) - .3, " Fiction",
+axes[0].text(actual["fiction"][0] - 0.05, len(order) - .04, " Fiction",
              color="#055f11", fontsize=8, va="top")
 fig.supxlabel(f"Tucker's congruence at $n={fiction_n:,}$".replace(",", "{,}"),
               fontsize=9)

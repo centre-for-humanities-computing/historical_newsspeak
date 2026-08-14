@@ -108,6 +108,15 @@ for (f in c("avg_sentlen", "avg_mdd")) {
   rm(m); gc()
 }
 
+# plot res[i] against fitted(m)[i], look for a fan shape
+p <- ggplot(data.frame(fitted = fitted(m)[i], res = res[i]),
+            aes(fitted, res)) +
+  geom_point(size = .5, alpha = .3) +
+  geom_hline(yintercept = 0, colour = "firebrick", linewidth = .3) +
+  labs(x = "Fitted values", y = "Deviance residuals") +
+  theme_minimal(base_size = 9)
+ggsave(file.path(FIGS, "gam_residuals.pdf"), p, width = 7, height = 3.5)
+
 
 # --- 3B. WHY A FACTOR SMOOTH FOR NEWSPAPER? -----------------------------------
 # s(newspaper, bs = "re") gives each title a LEVEL; s(year, newspaper,

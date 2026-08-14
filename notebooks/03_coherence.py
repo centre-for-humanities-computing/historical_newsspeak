@@ -26,7 +26,7 @@ from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.metrics.pairwise import cosine_similarity
 import sys
 sys.path.append("../src")
-from config import DATA_PATH, DATA_FILE, FIGS_PATH, FA_FEATURES, CATEGORIES, DISPLAY_NAMES, COMPLEXITY, DIVERSITY, REGISTER, AFFECT, MIN_YEAR
+from config import DATA_PATH, DATA_FILE, FIGS_PATH, FA_FEATURES, CATEGORIES, DISPLAY_NAMES, COMPLEXITY, DIVERSITY, REGISTER, AFFECT, MIN_YEAR, CATEGORY_COLORS
 
 MODEL = "logit"
 year_cutoff = MIN_YEAR
@@ -195,7 +195,7 @@ bal = _balance(df[cols].dropna(), "category", None, 0)
 X, yv = bal[FA_FEATURES].to_numpy(), bal["category"].astype(str).to_numpy()
 groups = bal["newspaper"].to_numpy()
 runs = []
-for seed in range(5):
+for seed in range(N_SEEDS):
       for tr, _ in StratifiedGroupKFold(N_SPLITS, shuffle=True, random_state=seed).split(X, yv, groups=groups):
             if len(tr) < 0.6 * len(X): continue
             pipe = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000)).fit(X[tr], yv[tr])
@@ -220,7 +220,8 @@ feats = [f for grp in GROUPS.values() for f in grp]
 m_all, s_all = coefs.loc[feats], coef_sd.loc[feats]
 classes = [c for c in CATEGORIES if c in coefs.columns]
 y = np.arange(len(feats))[::-1]
-palette = sns.color_palette("colorblind", len(classes))
+
+palette = [CATEGORY_COLORS[c] for c in classes]
 fig, axes = plt.subplots(1, len(classes), figsize=(2.2 * len(classes), 5.5), sharey=True, dpi=300)
 lim = np.abs(m_all.values).max() * 1.35
 
@@ -241,6 +242,12 @@ plt.tight_layout()
 plt.savefig(FIGS_PATH / "logit_coefs.pdf", bbox_inches="tight")
 plt.show()
 print(f"\nhollow markers (|mean| < SD): {(np.abs(m_all.values) < s_all.values).sum()} of {m_all.size}")
+
+# %%
+
+# how many of the 150 splits were retained? (and SD among them)
+print(f"{len(runs)} folds retained of {N_SEEDS * N_SPLITS}")   # was 5 * N_SPLITS
+print(f"max SD: {coef_sd.values.max():.4f}")
 
 # %%
 
@@ -447,8 +454,10 @@ across = cosine_similarity(A, B).ravel()
 
 rng = np.random.default_rng(0)
 fig, ax = plt.subplots(figsize=(5.5, 2.5), dpi=300)
-ax.scatter(within, np.full_like(within, 1) + rng.uniform(-.08, .08, len(within)), s=10, alpha=.35, color="#888888", label="within window")
-ax.scatter(across, np.full_like(across, 0) + rng.uniform(-.08, .08, len(across)), s=10, alpha=.35, color="#1f4fd8", label="across windows")
+ax.scatter(within, np.full_like(within, 1) + rng.uniform(-.08, .08, len(within)), s=10, alpha=.1, color="#888888", label="within window")
+ax.scatter(across, np.full_like(across, 0) + rng.uniform(-.08, .08, len(across)), s=10, alpha=.1, color="#1f4fd8", label="across windows")
+
+
 for v, y in [(within.mean(), 1), (across.mean(), 0)]:
     ax.plot([v, v], [y - .14, y + .14], color="black", lw=1.8, zorder=3)
 ax.annotate("", xy=(within.mean(), .5), xytext=(across.mean(), .5), arrowprops=dict(arrowstyle="<->", color="black", lw=1.2))
@@ -508,7 +517,8 @@ for i, a in enumerate(order):
         else: ax.grid(color="0.9", lw=.4); ax.set_axisbelow(True)
         for s in ("top", "right"): ax.spines[s].set_visible(False)
         ax.tick_params(labelsize=6)
-        if i == 0: ax.set_title(b, fontsize=8)
+        if i == 0: 
+            ax.set_title(b, fontsize=8)
         if j == 0: ax.set_ylabel(a, fontsize=8)
 fig.supxlabel("Window midpoint", fontsize=9); fig.supylabel("Fraction of true class predicted as column", fontsize=9)
 fig.suptitle("predicted →", fontsize=8, x=.55, y=.99)
@@ -536,7 +546,7 @@ plt.tight_layout(); plt.savefig(FIGS_PATH / "confusion_news_pair.pdf", dpi=300);
 # --- 3d. do the news genres' profiles converge? ----------------------------
 
 coef_vectors = rows
-del rows
+#del rows
 
 def between_genre_sim(g1, g2, windows, coef_dict):
     out = {}
@@ -545,16 +555,139 @@ def between_genre_sim(g1, g2, windows, coef_dict):
         out[s] = cosine_similarity(A, B).mean()
     return out
 
+# def between_genre_sim(g1, g2, windows, coef_dict):
+#     out = {}
+#     for s in windows:
+#         a = np.mean(coef_dict[(g1, s)], axis=0)
+#         b = np.mean(coef_dict[(g2, s)], axis=0)
+#         out[s] = float(cosine_similarity([a], [b])[0, 0])
+#     return out
+
 windows = sorted({s for _, s in coef_vectors})
 pairs = [("National", "International"), ("National", "Advertisement"), ("National", "fiction"), ("International", "Advertisement"), ("International", "fiction"), ("Advertisement", "fiction")]
-conv = pd.DataFrame({f"{a[:4]}-{b[:4]}": between_genre_sim(a, b, windows, coef_vectors) for a, b in pairs})
+conv = pd.DataFrame({f"{a}-{b}": between_genre_sim(a, b, windows, coef_vectors)
+                     for a, b in pairs})
 print(conv.round(3).to_string())
 
 ax = conv.plot(figsize=(6.5, 3.5), lw=1.8)
-ax.axhline(0, color="0.7", lw=1, ls=":")
+ax.axhline(0, color="0.7", lw=2, ls="dashed", zorder=0)
 ax.set_ylabel("Cosine similarity between profiles"); ax.set_xlabel("Window start")
 ax.legend(frameon=False, fontsize=8, ncol=2, loc="upper right")
+
 plt.tight_layout(); plt.savefig(FIGS_PATH / "between_genre_convergence.pdf", dpi=300); plt.show()
+
+
+
+fig, axes = plt.subplots(1, 2, figsize=(7.5, 3.2), sharey=True, dpi=300)
+
+nat_pairs = [c for c in conv.columns if c.startswith("National")]
+oth_pairs = [c for c in conv.columns if not c.startswith("National")]
+palette = sns.color_palette("colorblind", 3)
+
+for ax, cols, title in [
+    (axes[0], nat_pairs, "National with"),
+    (axes[1], oth_pairs, "Pairs without National"),
+]:
+    ax.axhline(0, color="0.75", lw=1, ls="--", zorder=0)
+    for c, col in zip(cols, palette):
+        lab = c.split("-")[1] if cols is nat_pairs else c.replace("-", "–")
+        ax.plot(conv.index, conv[c], lw=1.6, color=col, label=lab)
+    ax.set_xlabel("Window start")
+    ax.grid(color="0.92", lw=0.4); ax.set_axisbelow(True)
+    for s in ("top", "right"): ax.spines[s].set_visible(False)
+    ax.legend(frameon=False, fontsize=8, ncol=3, loc="lower center",
+              bbox_to_anchor=(0.5, 1.02), handlelength=1.2,
+              columnspacing=1.0, title=title, title_fontsize=9)
+
+axes[0].set_ylabel("Cosine similarity between profiles")
+plt.tight_layout()
+plt.savefig(FIGS_PATH / "between_genre_convergence.pdf", bbox_inches="tight")
+plt.show()
+
+# %%
+
+# another way to plot rolling cosim
+
+def between_genre_sim(g1, g2, windows, coef_dict):
+    mean, lo, hi = {}, {}, {}
+    for s in windows:
+        A = np.array(coef_dict[(g1, s)]); B = np.array(coef_dict[(g2, s)])
+        sims = cosine_similarity(A, B).ravel()
+        mean[s] = sims.mean()
+        lo[s] = np.percentile(sims, 5)
+        hi[s] = np.percentile(sims, 95)
+    return pd.DataFrame({"mean": mean, "lo": lo, "hi": hi})
+
+windows = sorted({s for _, s in coef_vectors})
+pairs = [("National", "International"), ("National", "Advertisement"), ("National", "fiction"),
+         ("International", "Advertisement"), ("International", "fiction"), ("Advertisement", "fiction")]
+
+
+conv = {f"{a}-{b}": between_genre_sim(a, b, windows, coef_vectors) for a, b in pairs}
+
+print(pd.DataFrame({k: v["mean"] for k, v in conv.items()}).round(3).to_string())
+
+# %%
+
+fig, axes = plt.subplots(1, 2, figsize=(7.5, 3.2), sharey=True, dpi=300)
+
+nat_pairs = [c for c in conv if c.startswith("National")]
+oth_pairs = [c for c in conv if not c.startswith("National")]
+
+STYLES = {
+    "International-Advertisement": (":", "0.25"),
+    "International-fiction":       ("--", "0.45"),
+    "Advertisement-fiction":       ("-.", "0.6"),
+}
+
+for ax, cols, title, split in [
+    (axes[0], nat_pairs, "National with", True),
+    (axes[1], oth_pairs, "Pairs without National", False),
+]:
+    ax.axhline(0, color="0.75", lw=1, ls="--", zorder=0)
+    for c in cols:
+        r = conv[c]
+        if split:
+            other = c.split("-")[1]
+            col, ls, lab = CATEGORY_COLORS[other], "-", DISPLAY_NAMES.get(other, other)
+            ax.fill_between(r.index, r["lo"], r["hi"], color=col, alpha=.15, lw=0)
+        else:
+            ls, col = STYLES[c]
+            lab = c.replace("-", "–")
+        ax.plot(r.index, r["mean"], lw=1.6, color=col, ls=ls, label=lab)
+    ax.set_xlabel("Window start")
+    ax.grid(color="0.92", lw=0.4); ax.set_axisbelow(True)
+    for s in ("top", "right"): ax.spines[s].set_visible(False)
+    ax.legend(frameon=False, fontsize=8, ncol=1, loc="lower center",
+              bbox_to_anchor=(0.5, 1.02), handlelength=1.8,
+              title=title, title_fontsize=9)
+
+axes[0].set_ylabel("Cosine similarity between profiles")
+plt.tight_layout()
+plt.savefig(FIGS_PATH / "between_genre_convergence.pdf", bbox_inches="tight")
+plt.show()
+
+
+# %%
+
+# as latex
+
+means = pd.DataFrame({k: v["mean"] for k, v in conv.items()})
+order = ["National-International", "National-Advertisement", "National-fiction",
+         "International-Advertisement", "International-fiction",
+         "Advertisement-fiction"]
+means = means[order]
+
+delta = (means.loc[1820] - means.loc[1770]).to_frame("1770--1820").T
+tab = pd.concat([means, delta])
+
+def fmt(v):
+    return ("$-$" if v < 0 else "") + f"{abs(v):.2f}"
+
+for idx, row in tab.iterrows():
+    cells = " & ".join(fmt(v) for v in row)
+    label = f"\\textbf{{{idx}}}" if isinstance(idx, str) else str(idx)
+    print(f"{label} & {cells} \\\\")
 
 # %%
 

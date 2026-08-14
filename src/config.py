@@ -75,3 +75,15 @@ DISPLAY_NAMES = {
 MIN_YEAR = 1740
 RHO_THRESHOLD = 0.05
 N_FACTORS = 3
+
+
+# Genre colours. Single source of truth; mirrored in config.R.
+CATEGORY_COLORS = {
+    "Advertisement": "#ff6f00",   # vivid orange
+    "National":      "#ff0090",   # hot magenta-pink
+    "International": "#7b2ff7",   # electric purple
+    "fiction":       "#00c853",   # bright green
+}
+
+# Ordered list matching CATEGORIES, for anything that wants a sequence
+PALETTE = [CATEGORY_COLORS[c] for c in CATEGORIES]
