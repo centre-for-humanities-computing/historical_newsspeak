@@ -16,12 +16,12 @@ python notebooks/fa.py
 This runs the first Factor Analysis script.
 Find the notebooks folder and then run, in sequence:
 
-[skip: 01_prep_data.py (already done in the test file]
-1. 03_coherence.py
-2. 04_correlations.py
-3. 05_export_for_GAM.py
-4. 06_gam.R
-5. 06b_sensitivity_check.R
+[skip: `01_prep_data.py` (already done in the test file)]
+1. `03_coherence.py` - runs seperability analysis via logistic regression
+2. 04_correlations.py - runs correlation analysis
+3. 05_export_for_GAM.py - make data for R
+4. 06_gam.R - runs GAMMs in R
+5. 06b_sensitivity_check.R - runs sensitivity checks in R
 
 
 
