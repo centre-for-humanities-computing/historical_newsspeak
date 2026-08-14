@@ -236,8 +236,15 @@ print(f"wrote {out}: {len(df):,} rows, {len(df.columns)} columns")
 print(f"\n{df.category.value_counts().to_string()}")
 print(f"\nmean pwa by category:\n{df.groupby('category').pwa.mean().round(4).to_string()}")
 
-
 # %%
+
+# make small subset of the file for testing the downstream analysis code
+test = df.sample(n=450000, random_state=42)
+test_out = DATA_PATH / "usage_features_w_pwa_test.parquet"
+test.to_parquet(test_out, index=False)
+print(f"wrote {test_out}: {len(test):,} rows, {len(test.columns)} columns")
+
+
 # --- 7. corpus descriptives ------------------------------------------------
 
 print(f"{len(df):,} articles | {df.newspaper.nunique()} newspapers | "

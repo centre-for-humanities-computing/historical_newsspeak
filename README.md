@@ -1,8 +1,28 @@
 # historical_newsspeak
 
-Tracking diachronic, genre-specific linguistic change in ~5 million Danish newspaper articles (1666–1849). Pipeline: spaCy/DaCy tokenization → stylistic feature extraction → sentiment scoring → factor analysis and mixed-effects modeling of change over time, across four genres (National, International, Advertisement, Fiction).
+Tracking diachronic, genre-specific linguistic change in ~5 million Danish newspaper articles (1666–1849). Pipeline: spaCy/DaCy tokenization → stylistic feature extraction → sentiment scoring → factor analysis and generalized additive mixed modeling of change over time, across four genres (National, International, Advertisement, Fiction).
 
-Accompanying poster: *"Language in Expansion: Genre and Diachronic Variation in Danish Newspapers"* (EADH 2026).
+
+## Running the analysis
+
+To run a random sample of the data (full dataset is too large to store in this repo), first set config.py to take `data/usage_features_w_pwa_test.parquet` as the input file, then start with:
+
+```bash
+source .venv-features/bin/activate
+python notebooks/fa.py
+```
+(or just use the interactive window with the notebook)
+
+This runs the first Factor Analysis script.
+Find the notebooks folder and then run, in sequence:
+
+[skip: 01_prep_data.py (already done in the test file]
+1. 03_coherence.py
+2. 04_correlations.py
+3. 05_export_for_GAM.py
+4. 06_gam.R
+5. 06b_sensitivity_check.R
+
 
 
 ## Repository structure
@@ -77,13 +97,9 @@ bash setup_env_analysis.sh
 source .venv-analysis/bin/activate
 ```
 
-See `methods_checkpoint.md` for the full list of environment-specific
-gotchas encountered (B200/Blackwell GPU CUDA build requirements, numpy
-ABI conflicts, etc.) if you're setting this up on similar hardware.
-
 ## Running the pipeline
 
-Run in order; each stage reads the previous stage's output from `data/`.
+Runs in order; each stage reads the previous stage's output from `data/`.
 
 ```bash
 # 1. Tokenization (.venv)
@@ -106,28 +122,6 @@ Both `run_pipeline.py` and `feature_pipeline.py` are resumable: the
 former skips already-processed articles via `processed_ids.txt`, the
 latter skips a shard entirely if its output file already exists.
 
-## Running the analysis
-
-```bash
-source .venv-features/bin/activate
-python notebooks/main.py
-```
-
-This loads the merged, cleaned feature table and runs, in sequence:
-
-1. Descriptive stats + article-volume figure
-2. PCA (baseline: no dominant single "complexity" component)
-3. VIF check + factor analysis (3-factor solution: syntactic complexity,
-   lexical diversity, involved-vs-informational register)
-4. Genre-specific measurement invariance (leave-one-out factor
-   congruence -- structure breaks down for Fiction specifically)
-5. Correlation-with-time analysis, per genre
-6. Changepoint detection on yearly trends
-7. Mixed-effects models on six representative features, by genre
-8. Effect-size translation (SD-relative slopes, rho^2)
-
-Each numbered section is labeled with which table/figure in the
-paper/poster it produces.
 
 ## Known issues / fixed bugs worth knowing about
 
@@ -163,12 +157,12 @@ International, Advertisement, Fiction).
 The final processed feature table
 (`usage_features_13-07-26_with_nominal.parquet`, ~648MB) is too large
 to store directly in this GitHub repo and is hosted externally
-(ON DEMAND - email me: pascale.feldkamp@cas.au.dk)
+(ON DEMAND - email me: XXX)
 
 ## Citation
 
 If you use this pipeline or findings, please cite:
 
 ```
-[BibTeX entry for the EADH 2026 poster -- add once available]
+[great BibTeX entry]
 ```

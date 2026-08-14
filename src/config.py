@@ -13,6 +13,8 @@ FIGS_PATH = ROOT / "figs"
 LOGS_PATH = ROOT / "logs"
 RESOURCES = ROOT / "resources"
 
+# Hi there.
+# set this to `data/usage_features_w_pwa_test.parquet` to run a small random sample of the data
 DATA_FILE = DATA_PATH / "usage_features_w_pwa.parquet"
 
 CATEGORIES = ["National", "International", "Advertisement", "fiction"]

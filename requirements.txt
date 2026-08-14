@@ -23,3 +23,9 @@ pandas
 datasets
 tqdm
 pyarrow
+scikit-learn
+statsmodels
+pathlib
+matplotlib
+seaborn
+huggingface_hub
