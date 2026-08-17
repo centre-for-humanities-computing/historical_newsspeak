@@ -181,45 +181,6 @@ p <- slopes |>
 ggsave(file.path(FIGS, "gam_within_title_slopes.pdf"), p, width = 8, height = 3.5)
 
 
-# --- EXAMINE SDs ----
-
-
-disp <- d |>
-  group_by(category, year) |>
-  summarise(across(all_of(REPRESENTATIVE), sd), n = n(), .groups = "drop") |>
-  filter(n >= 100)
-disp
-
-disp_long <- disp |>
-  pivot_longer(all_of(REPRESENTATIVE), names_to = "feature", values_to = "sd") |>
-  group_by(feature) |>
-  mutate(sd_z = sd / mean(sd)) |>          # relative to that feature's mean SD
-  ungroup()
-
-# The test: does National's dispersion rise between the drift windows while
-# International's does not?
-disp_long |>
-  filter(year >= 1760, year <= 1829) |>
-  mutate(win = ifelse(year <= 1789, "1760-89", "1800-29")) |>
-  filter(win == "1760-89" | year >= 1800) |>
-  group_by(category, feature, win) |>
-  summarise(m = mean(sd_z), .groups = "drop") |>
-  pivot_wider(names_from = win, values_from = m) |>
-  mutate(change = `1800-29` / `1760-89` - 1) |>
-  select(feature, category, change) |>
-  pivot_wider(names_from = category, values_from = change) |>
-  as.data.frame() |> print(digits = 2)
-
-disp_long |>
-  ggplot(aes(year, sd_z, colour = category)) +
-  geom_line(linewidth = .2) +
-  geom_smooth(se = FALSE, linewidth = .7, method = "loess", span = .4) +
-  facet_wrap(~ feature, scales = "free_y") +
-  scale_colour_manual(values = PAL) +
-  labs(y = "Within-genre SD, relative to feature mean", x = NULL) +
-  theme_minimal(base_size = 8)
-ggsave(file.path(FIGS, "gam_within_genre_dispersion.pdf"), width = 7, height = 5)
-
 
 # --- 4. DIAGNOSTICS ----------------------------------------------------------
 # k.check compares fitted residuals against what a larger basis would capture.
@@ -414,3 +375,90 @@ smooth_all |>
 
 cat("\ndone. tables in", OUT, "| figures in", FIGS, "\n")
 
+# --- 7. DISPERSION -----------------------------------------------------------
+# The mean models say where each genre's centre moved. They do not say whether
+# the genre spread out. Section 4.3 predicts that National's features become
+# more dispersed while International's do not (the "broadening" reading of its
+# rotation) -- testable here, and the prediction is falsifiable in the useful
+# direction: if dispersion falls, broadening is not what happened.
+#
+# Raw within-year SDs track the level, so a feature whose mean falls shows a
+# falling SD arithmetically. We therefore take residuals from the fitted mean
+# models -- which removes the genre trajectory, the newspaper term, length and
+# German -- and model their dispersion with the same structure.
+
+MIN_CELL <- 30
+
+resid_one <- function(f) {
+  m <- load_model(f)
+  out <- tibble(row = seq_len(nrow(d)),
+                feature = f,
+                r = residuals(m, type = "deviance"))
+  rm(m); gc()
+  out
+}
+
+cells <- map(FEATURES, resid_one) |>
+  list_rbind() |>
+  left_join(d |> mutate(row = row_number()) |>
+              select(row, category, year, newspaper),
+            by = "row") |>
+  group_by(category, feature, newspaper, year) |>
+  summarise(sd_r = sd(r), n = n(), .groups = "drop") |>
+  filter(n >= MIN_CELL, sd_r > 0)
+
+cat("\ncells per genre at n >=", MIN_CELL, ":\n")
+print(count(cells, category, feature) |>
+        pivot_wider(names_from = feature, values_from = n) |>
+        as.data.frame())
+
+# log SD: positive and right-skewed, and on the log scale the category smooths
+# read as proportional change in dispersion, comparable across features.
+# s(log(n)) absorbs the small-cell downward bias that survives the floor.
+disp_gam <- function(f) {
+  bam(log(sd_r) ~ category + s(year, by = category, k = K_YEAR) +
+        s(year, newspaper, bs = "fs") + s(log(n)),
+      data = filter(cells, feature == f),
+      gamma = GAMMA_PENALTY, method = "fREML",
+      discrete = TRUE, nthreads = N_THREADS)
+}
+
+disp_smooths <- map(FEATURES, \(f) {
+  m <- disp_gam(f)
+  out <- smooth_estimates(m, select = year_smooths(m), n = 200) |>
+    add_confint() |>
+    mutate(genre = factor(genre_of(.smooth), levels = CATS), feature = f)
+  rm(m); gc(); out
+}) |> list_rbind()
+
+write.csv(disp_smooths, file.path(OUT, "dispersion_smooths.csv"), row.names = FALSE)
+
+# The section 4.3 test: National vs International over the drift windows.
+cat("\ndispersion change, 1760-89 vs 1800-29 (log-units, + = more dispersed):\n")
+disp_smooths |>
+  filter(year >= 1760, year <= 1829) |>
+  mutate(win = ifelse(year <= 1789, "early", "late")) |>
+  filter(win == "early" | year >= 1800) |>
+  group_by(feature, genre, win) |>
+  summarise(m = mean(.estimate), .groups = "drop") |>
+  pivot_wider(names_from = win, values_from = m) |>
+  mutate(change = late - early) |>
+  select(feature, genre, change) |>
+  pivot_wider(names_from = genre, values_from = change) |>
+  as.data.frame() |> print(digits = 2)
+
+p <- disp_smooths |>
+  mutate(panel = factor(FEAT_NAME[feature], levels = unname(FEAT_NAME))) |>
+  ggplot(aes(year, .estimate, colour = genre, fill = genre)) +
+  geom_hline(yintercept = 0, colour = "grey80", linewidth = .3) +
+  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci), alpha = .12, colour = NA) +
+  geom_line(linewidth = .8) +
+  facet_wrap(~ panel, ncol = 2, dir = "h") +
+  scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
+  scale_x_continuous(breaks = seq(1750, 1840, 30)) +
+  guides(fill = "none") +
+  labs(y = "Partial effect on log within-cell SD", x = NULL, colour = NULL) +
+  theme_minimal(base_size = 8) +
+  theme(legend.position = "top", panel.grid.minor = element_blank())
+
+ggsave(file.path(FIGS, "gam_dispersion.pdf"), p, width = 7, height = 6)
