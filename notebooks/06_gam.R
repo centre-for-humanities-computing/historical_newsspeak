@@ -13,6 +13,9 @@ MIN_N      <- 20     # articles per mean; above this they're about equally preci
                      # so equal weights (see variance_check.csv)
 MIN_PERIOD <- 2      # a period has to span more than a year
 BASE_SIZE  <- 11
+DIR_COL    <- c(down = "#b2182b", up = "#2166ac")   # RdBu ends; not a category colour
+CAT_LAB    <- c(Advertisement = "Advertisement", National = "National",
+                International = "International", fiction = "Fiction")
 
 # specs: main = with newspaper trajectories, no_fs = without ("press as
 # printed"), k30 = main with a bigger basis. Markers keep the dotted lines readable.
@@ -182,7 +185,7 @@ p <- agree_tab |>
   geom_col(width = .7) +
   geom_vline(xintercept = 0, colour = "grey30", linewidth = .4) +
   facet_wrap(~ panel, ncol = 2) +
-  scale_fill_manual(values = c(falling = "#d95f02", rising = "#1f78b4"),
+  scale_fill_manual(values = c(falling = DIR_COL[["down"]], rising = DIR_COL[["up"]]),
                     labels = c(falling = "titles falling", rising = "titles rising")) +
   scale_x_continuous(labels = abs, breaks = seq(-12, 12, 4)) +
   labs(x = NULL, y = NULL, fill = NULL) +
@@ -347,7 +350,7 @@ spec_plot <- function(which_specs) {
     geom_point(data = marks, aes(shape = spec), size = 2.2, stroke = .9,
                fill = "white") +
     facet_wrap(~ panel, ncol = 2, scales = "free_y") +
-    scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
+    scale_colour_manual(values = PAL, labels = CAT_LAB) + scale_fill_manual(values = PAL) +
     scale_linetype_manual(values = SPEC_LTY[which_specs],
                           labels = SPEC_LAB[which_specs], drop = FALSE) +
     scale_shape_manual(values = SPEC_SHAPE[which_specs],
@@ -473,8 +476,8 @@ p <- ggplot() +
                              ymax = y + .4, fill = state, alpha = confirmed)) +
   scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = .35), guide = "none") +
   facet_wrap(~ panel, ncol = 2) +
-  scale_fill_manual(values = c(decrease = "#d95f02", increase = "#1f78b4")) +
-  scale_y_continuous(breaks = seq_along(CATS), labels = rev(CATS)) +
+  scale_fill_manual(values = c(decrease = DIR_COL[["down"]], increase = DIR_COL[["up"]])) +
+  scale_y_continuous(breaks = seq_along(CATS), labels = CAT_LAB[rev(CATS)]) +
   scale_x_continuous(breaks = seq(1740, 1840, 20)) +
   labs(x = NULL, y = NULL, fill = NULL) +
   theme_minimal(base_size = BASE_SIZE) +
