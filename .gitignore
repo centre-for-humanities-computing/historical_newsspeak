@@ -16,6 +16,14 @@ data/eno
 data/gam
 data/models
 data/spec_check
+data/gam_cells/
+data/models_cells/
+data/ad_check/
+
+# OS / editor clutter
+.DS_Store
+.Rhistory
+.venv*/
 
 # mine own
 notebooks/reprints.py

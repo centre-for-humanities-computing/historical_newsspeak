@@ -1,464 +1,501 @@
-# 06_gam.R --------------------------------------------------------------------
-# Diachronic trajectories of six representative indicators, by genre.
-#
-# A linear model returns the average rate of change over the period, which
-# exists for any data including data where nothing changed at a constant rate.
-# A GAM estimates the shape instead: a penalised curve per genre, from which we
-# read (a) the trajectory and (b) the years where its slope is reliably
-# non-zero.
-#
-# Run after 05_export_gam_input.py. Model settings live in src/config.R.
-# The periods table and figure come from 06b_sensitivity.R, which needs the
-# models fitted here.
-#
-# Outputs, in data/gam/ and figs/:
-#   titles_per_year.{csv,tex}        coverage, the caveat behind section 6
-#   within_title_slopes.csv          do titles move together?
-#   edf_per_title.csv                is the fs term earning its keep?
-#   edf.csv                          k.check diagnostics
-#   smooths.csv                      fitted trajectories with intervals
-#   trajectory_precision.{csv,tex}   range relative to band width
-#   identification.csv               fs vs random-intercept divergence by year
-#   gam_trajectories.pdf             main figure
-#   gam_identification_check.pdf     appendix figure
+# 06_gam.R -- GAMMs per indicator and category, fitted to newspaper x year x
+# category means (articles in one paper-year aren't independent).
+# Run after 05_export_for_GAM.py. Writes data/gam_cells/, data/models_cells/
+# and figs/gamcell_*.pdf. Delete data/models_cells/*.rds after changing the spec.
 
 library(here)
 source(here("src", "config.R"))
 library(purrr)
 
 FEATURES <- REPRESENTATIVE
-OUT <- file.path(DATA, "gam"); dir.create(OUT, showWarnings = FALSE)
+K_CELL     <- 20     # just a ceiling, REML picks the smoothness
+MIN_N      <- 20     # articles per mean; above this they're about equally precise,
+                     # so equal weights (see variance_check.csv)
+MIN_PERIOD <- 2      # a period has to span more than a year
+BASE_SIZE  <- 11
 
-# Tables that go into the paper are written as LaTeX as well as CSV, so a
-# rerun cannot leave the manuscript reporting stale numbers.
-write_tex <- function(df, file, caption, label, digits = 2) {
-  if (!requireNamespace("xtable", quietly = TRUE)) {
-    message("xtable not installed; skipping ", file); return(invisible(NULL))
-  }
-  print(xtable::xtable(as.data.frame(df), caption = caption,
-                       label = label, digits = digits),
-        file = file.path(OUT, file), booktabs = TRUE,
-        include.rownames = FALSE, caption.placement = "top")
-}
+# specs: main = with newspaper trajectories, no_fs = without ("press as
+# printed"), k30 = main with a bigger basis. Markers keep the dotted lines readable.
+SPEC_LAB   <- c(main  = "with newspaper trajectories",
+                no_fs = "without (press as printed)",
+                k30   = "k = 30")
+SPEC_LTY   <- c(main = "solid", no_fs = "11", k30 = "42")
+SPEC_SHAPE <- c(main = NA, no_fs = 1, k30 = 2)
+SPEC_MARK  <- c(no_fs = 0, k30 = 5)  # marker years: year %% 10 == this
 
+OUT  <- file.path(DATA, "gam_cells");    dir.create(OUT,  showWarnings = FALSE)
+MODS <- file.path(DATA, "models_cells"); dir.create(MODS, showWarnings = FALSE)
 
-# --- 1. DATA -----------------------------------------------------------------
-
-d <- load_gam_data()
-
-cat(nrow(d), "rows,", nlevels(d$newspaper), "newspapers,",
-    min(d$year), "-", max(d$year), "\n")
-
-# Titles per year. Coverage is thin at both ends, which is the caveat the
-# identification check in section 6 quantifies.
-title_counts <- d |>
-  group_by(year) |>
-  summarise(titles = n_distinct(newspaper), articles = n(), .groups = "drop")
-
-write.csv(title_counts, file.path(OUT, "titles_per_year.csv"), row.names = FALSE)
-write_tex(title_counts, "titles_per_year.tex",
-          "Distinct newspaper titles and articles per year.",
-          "tab:titles_per_year", digits = 0)
-
-cat("years with <8 titles:", sum(title_counts$titles < 8),
-    "of", nrow(title_counts),
-    "| last:", max(title_counts$year[title_counts$titles < 8]), "\n")
-
-# personal_pronoun_ratio is zero in ~43% of articles, so its "rate" is partly a
-# presence/absence indicator. Flagged here, caveated in the results.
-for (f in FEATURES) {
-  z <- mean(d[[f]] == 0, na.rm = TRUE)
-  if (z > 0.10) cat(sprintf("NOTE %-24s %.0f%% exact zeros\n", f, 100 * z))
-}
-
-
-# --- 2. FIT ------------------------------------------------------------------
-# feature ~ category                        each genre its own level
-#         + s(year, by = category)          each genre its own trajectory
-#         + s(year, newspaper, bs = "fs")   each newspaper its own trajectory
-#         + s(log_tokens)                   article length, where a confound
-#         + german_probability
-#
-# fit_gam() is in config.R. Fitted one at a time and cached: several bam
-# objects on 3.6M rows will not co-exist in memory. DELETE data/models/*.rds
-# after changing the specification or the window, or the loop will skip and you
-# will diagnose stale models.
-
-for (f in FEATURES) {
-  path <- file.path(MODELS, paste0("gam_", f, ".rds"))
-  if (file.exists(path)) { cat("skip (exists):", f, "\n"); next }
-  cat("fitting:", f, "... ")
-  t0 <- Sys.time()
-  saveRDS(fit_gam(f, d), path)
-  cat(sprintf("%.1f min\n", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
-  gc()
-}
-
-
-# ---- 3A. Model diagnostics on residuals. 
-# the residual check is the one thing that would tell you whether Gamma(log) 
-# was the right call for sentence length and MDD. Worth checking:
-
-set.seed(1)
-for (f in c("avg_sentlen", "avg_mdd")) {
-  m <- load_model(f)
-  res <- residuals(m, type = "deviance")
-  i <- sample(length(res), 5e4)
-  # plot res[i] against fitted(m)[i], look for a fan shape
-  rm(m); gc()
-}
-
-# plot res[i] against fitted(m)[i], look for a fan shape
-p <- ggplot(data.frame(fitted = fitted(m)[i], res = res[i]),
-            aes(fitted, res)) +
-  geom_point(size = .5, alpha = .3) +
-  geom_hline(yintercept = 0, colour = "firebrick", linewidth = .3) +
-  labs(x = "Fitted values", y = "Deviance residuals") +
-  theme_minimal(base_size = 9)
-ggsave(file.path(FIGS, "gam_residuals.pdf"), p, width = 7, height = 3.5)
-
-
-# --- 3B. WHY A FACTOR SMOOTH FOR NEWSPAPER? -----------------------------------
-# s(newspaper, bs = "re") gives each title a LEVEL; s(year, newspaper,
-# bs = "fs") gives it a TRAJECTORY. Two diagnostics, because a slope cannot see
-# shape: titles turn out to agree in DIRECTION on four of six indicators while
-# the fs term still spends ~5 edf per title, i.e. they differ in SHAPE even
-# where they agree in direction.
-
-W_LO <- 1790; W_HI <- 1835   # window where several large titles overlap
-#W_LO <- 1780; W_HI <- 1840  # window where several large titles overlap
-
-MIN_YEARS <- 15              # years a title needs in the window to count
-
-# for (w in list(c(1780, 1840), c(1790, 1835), c(1785, 1845))) {
-#   cat("\n", w[1], "-", w[2], "\n")
-#   # rerun the slopes block with W_LO <- w[1]; W_HI <- w[2]
-# }
-
-slopes <- map(FEATURES, \(f) {
-  d |>
-    filter(year >= W_LO, year <= W_HI) |>
-    group_by(newspaper, year) |>
-    summarise(m = mean(.data[[f]]), n = n(), .groups = "drop") |>
-    filter(n >= 30) |>
-    group_by(newspaper) |>
-    filter(n() >= MIN_YEARS) |>
-    summarise(slope_per_decade = coef(lm(m ~ year))[2] * 10, .groups = "drop") |>
-    mutate(feature = f)
-}) |> list_rbind()
-
-write.csv(slopes, file.path(OUT, "within_title_slopes.csv"), row.names = FALSE)
-
-cat("\nwithin-title slopes per decade,", W_LO, "-", W_HI,
-    "\n(agree = share of titles on the majority side of zero)\n")
-slopes |>
-  group_by(feature) |>
-  summarise(n_titles = n(),
-            n_neg    = sum(slope_per_decade < 0),
-            agree    = max(n_neg, n_titles - n_neg) / n_titles,
-            median   = median(slope_per_decade), .groups = "drop") |>
-  arrange(desc(agree)) |> as.data.frame() |> print(digits = 3)
-
-p <- ggplot(slopes, aes(slope_per_decade, feature)) +
-  geom_vline(xintercept = 0, colour = "firebrick", linewidth = .3) +
-  geom_point(size = 2, alpha = .5, colour = "grey20") +
-  labs(x = paste0("Within-title slope per decade, ", W_LO, "-", W_HI), y = NULL) +
-  theme_minimal(base_size = 9)
-ggsave(file.path(FIGS, "gam_within_title_slopes.pdf"), p, width = 8, height = 3.5)
-
-p <- slopes |>
-  group_by(feature) |>
-  mutate(slope_std = slope_per_decade / sd(slope_per_decade),
-         agree = max(sum(slope_per_decade < 0), sum(slope_per_decade > 0)) / n(),
-         lab = sprintf("%s  (%.0f%%)", feature, 100 * agree)) |>
-  ungroup() |>
-  ggplot(aes(slope_std, reorder(lab, agree))) +
-  geom_vline(xintercept = 0, colour = "firebrick", linewidth = .3) +
-  geom_point(size = 2, alpha = .5, colour = "grey20") +
-  labs(x = paste0("Within-title slope, ", W_LO, "-", W_HI,
-                  " (SD units within feature)"), y = NULL) +
-  theme_minimal(base_size = 9)
-ggsave(file.path(FIGS, "gam_within_title_slopes.pdf"), p, width = 8, height = 3.5)
-
-
-
-# --- 4. DIAGNOSTICS ----------------------------------------------------------
-# k.check compares fitted residuals against what a larger basis would capture.
-# Read the two columns together: a low k-index WITH edf near k' means the basis
-# ran out of room. Here edf sits near k' whatever k we choose (see 06b), so the
-# basis rather than the penalty sets the resolution -- k = 12 is a choice of
-# timescale we make and state, and a borderline k-index follows from it: there
-# is structure below the decadal scale and we are not modelling it.
-
-edf_all <- map(FEATURES, \(f) {
-  m <- load_model(f)
-  cat("\n===", f, "===\n"); print(k.check(m))
-  out <- gratia::edf(m) |> mutate(feature = f)
-  rm(m); gc(); out
-}) |> list_rbind()
-
-write.csv(edf_all, file.path(OUT, "edf.csv"), row.names = FALSE)
-
-cat("\nedf per year smooth (1 = a straight line, 11 = basis saturated):\n")
-edf_all |>
-  filter(grepl("^s\\(year\\):", .smooth)) |>
-  mutate(genre = genre_of(.smooth)) |>
-  select(feature, genre, .edf) |>
-  pivot_wider(names_from = feature, values_from = .edf) |>
-  as.data.frame() |> print(digits = 3)
-
-# The second half of the specification argument: ~1 edf per title means the
-# term is behaving like an intercept; ~5 means it is fitting title-specific
-# curvature that a random intercept cannot hold, which would otherwise land in
-# the year term.
-edf_per_title <- edf_all |>
-  filter(grepl("newspaper", .smooth)) |>
-  transmute(feature, edf_per_title = .edf / nlevels(d$newspaper))
-
-cat("\nedf per title on the newspaper term:\n")
-print(as.data.frame(edf_per_title), digits = 3)
-write.csv(edf_per_title, file.path(OUT, "edf_per_title.csv"), row.names = FALSE)
-
-
-# --- 5. TRAJECTORIES ---------------------------------------------------------
-# Partial effects of year, centred at zero within genre: these show CHANGE, not
-# the level differences between genres, which live in the parametric category
-# term. For sentence length and dependency distance the link is logarithmic, so
-# the curve is proportional change.
-#
-# Each curve is divided by its own SD so the six panels share an axis. Without
-# it, a feature moving by 0.005 in raw units and one moving by 0.5 need
-# different scales, and free scales magnify the small ones until noise looks
-# like signal. Raw rates are in the periods table (06b).
-
-smooth_all <- map(FEATURES, \(f) {
-  m <- load_model(f)
-  out <- smooth_estimates(m, select = year_smooths(m), n = 200) |>
-    add_confint() |>
-    mutate(genre = factor(genre_of(.smooth), levels = CATS), feature = f)
-  rm(m); gc(); out
-}) |> list_rbind()
-
-write.csv(smooth_all, file.path(OUT, "smooths.csv"), row.names = FALSE)
-
-# Same ordering as the periods figure in 06b: one construct per row, the two
-# markers of that construct side by side, stronger factor marker on the left.
-# facet_wrap with ncol = 2 fills row-wise, so this order gives complexity /
-# diversity / register down the page.
-FEAT_NAME <- c(avg_sentlen            = "Avg. sentence length",
-               avg_mdd                = "Avg. dependency distance",
-               cttr_resid             = "CTTR",
-               noun_ttr_resid         = "Noun TTR",
-               nominal_verb_ratio     = "Nominal/verb ratio",
+FEAT_NAME <- c(avg_sentlen = "Sentence length (tokens)",
+               avg_mdd = "Dependency distance (tokens)",
+               cttr_resid = "CTTR (residualised)",
+               noun_ttr_resid = "Noun TTR (residualised)",
+               nominal_verb_ratio = "Nominal/verb ratio",
                personal_pronoun_ratio = "Personal pronoun ratio")
 
-# Trajectories whose range is small relative to their own uncertainty are drawn
-# dotted and grey: a band that accommodates a flat line does not support
-# describing a shape. The threshold is arbitrary but stated, and the ratios go
-# to the appendix so a reader can apply their own.
-RATIO_CUT <- 1.0
 
-traj <- smooth_all |>
-  group_by(feature) |>
-  mutate(across(c(.estimate, .lower_ci, .upper_ci), \(x) x / sd(.estimate))) |>
-  group_by(feature, genre) |>
-  mutate(ratio = (max(.estimate) - min(.estimate)) /
-                 mean(.upper_ci - .lower_ci),
-         determined = ratio >= RATIO_CUT) |>
-  ungroup() |>
-  mutate(panel = factor(FEAT_NAME[feature], levels = unname(FEAT_NAME)))
+# --- 1. means per newspaper x year x category ---------------------------------
 
-p <- ggplot(traj, aes(year, .estimate, group = genre)) +
-  geom_hline(yintercept = 0, colour = "grey80", linewidth = .3) +
-  geom_ribbon(data = filter(traj, determined),
-              aes(ymin = .lower_ci, ymax = .upper_ci, fill = genre),
-              alpha = .12, colour = NA) +
-  geom_line(data = filter(traj, !determined),
-            colour = "grey65", linetype = "dotted", linewidth = .5) +
-  geom_line(data = filter(traj, determined),
-            aes(colour = genre), linewidth = .8) +
-  facet_wrap(~ panel, ncol = 2, dir = "h") +
-  scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
-  scale_x_continuous(breaks = seq(1750, 1840, 30)) +
-  guides(fill = "none") +
-  labs(y = "Standardised partial effect", x = NULL, colour = NULL) +
-  theme_minimal(base_size = 8) +
-  theme(legend.position  = "top",
-        panel.grid.minor = element_blank(),
-        panel.spacing    = unit(0.8, "lines"),
-        strip.text       = element_text(size = 8, hjust = 0))
+d <- load_gam_data()    # 1740-1848, see config.R
 
-ggsave(file.path(FIGS, "gam_trajectories.pdf"), p, width = 7, height = 6)
+cells <- d |>
+  group_by(newspaper, year, category) |>
+  summarise(n = n(),
+            # variances first, the mean across() overwrites the names
+            across(all_of(FEATURES), \(x) var(x, na.rm = TRUE),
+                   .names = "{.col}__s2"),
+            across(all_of(FEATURES), \(x) mean(x, na.rm = TRUE)),
+            german_probability = mean(german_probability),
+            log_tokens = mean(log_tokens),
+            .groups = "drop") |>
+  filter(n >= MIN_N) |>
+  mutate(np_year  = factor(paste(newspaper, year, sep = "_")),
+         category = factor(category, levels = CATS))
 
-ratios <- traj |>
-  group_by(panel, genre) |>
-  summarise(range = max(.estimate) - min(.estimate),
-            band  = mean(.upper_ci - .lower_ci),
-            ratio = range / band, .groups = "drop") |>
-  arrange(panel, desc(ratio))
-
-cat("\ntrajectory range relative to mean band width",
-    sprintf("(dotted below %.1f):\n", RATIO_CUT))
-print(as.data.frame(ratios), digits = 2)
-write.csv(ratios, file.path(OUT, "trajectory_precision.csv"), row.names = FALSE)
-write_tex(ratios, "trajectory_precision.tex",
-          paste("Range of each fitted trajectory relative to the mean width of",
-                "its own confidence band. Below 1 the band accommodates a flat",
-                "line and the shape should not be described."),
-          "tab:trajectory_precision")
+cat(nrow(d), "articles ->", nrow(cells), "cells,",
+    nlevels(cells$np_year), "newspaper-years,",
+    n_distinct(cells$newspaper), "titles,", min(cells$year), "-", max(cells$year), "\n")
+print(count(cells, category), n = Inf)
+write.csv(select(cells, -ends_with("__s2")), file.path(OUT, "cells.csv"),
+          row.names = FALSE)
 
 
-# --- 6. IDENTIFICATION -------------------------------------------------------
-# The newspaper term absorbs title-specific trajectories. Where the corpus
-# holds one or two titles, that is indistinguishable from absorbing the corpus
-# trend: "the 1750s changed" and "this paper changed" are the same statement.
-#
-# Fitting the same model with newspaper INTERCEPTS instead makes the ambiguity
-# visible. The two specifications resolve it in opposite directions -- the
-# factor smooth toward the title, the intercept toward the year -- so the gap
-# between them measures how much the early estimates depend on that choice.
+# --- 2. models ----------------------------------------------------------------
+# no newspaper-year random intercept: tried it, variance came out at zero
 
-m_ri <- bam(avg_sentlen ~ category + s(year, by = category, k = K_YEAR) +
-              s(newspaper, bs = "re") + german_probability,
-            data = d, family = Gamma(link = "log"), gamma = GAMMA_PENALTY,
-            method = "fREML", discrete = TRUE, nthreads = N_THREADS)
-
-nd <- expand.grid(year = MIN_YEAR:MAX_YEAR,
-                  category = factor(CATS, levels = CATS))
-nd$newspaper          <- levels(d$newspaper)[1]
-nd$log_tokens         <- mean(d$log_tokens)
-nd$german_probability <- mean(d$german_probability)
-
-m_fs <- load_model("avg_sentlen")
-nd$fs <- predict(m_fs, nd, type = "response", exclude = "s(year,newspaper)")
-nd$ri <- predict(m_ri, nd, type = "response", exclude = "s(newspaper)")
-rm(m_fs, m_ri); gc()
-
-raw <- d |>
-  group_by(year, category) |>
-  summarise(m = mean(avg_sentlen), n = n(), .groups = "drop") |>
-  filter(n >= 50)
-
-p <- ggplot(nd, aes(year, colour = category)) +
-  geom_line(data = raw, aes(year, m), linewidth = .3, alpha = .4) +
-  geom_line(aes(y = fs), linewidth = .8) +
-  geom_line(aes(y = ri), linewidth = .8, linetype = "22") +
-  scale_colour_manual(values = PAL) +
-  labs(y = "Fitted mean sentence length (tokens)", x = NULL, colour = NULL) +
-  theme_minimal(base_size = 9) + theme(legend.position = "top")
-
-ggsave(file.path(FIGS, "gam_identification_check.pdf"), p, width = 7, height = 5)
-
-ident <- nd |>
-  group_by(year) |>
-  summarise(maxdiff = max(abs(fs - ri)),
-            reldiff = max(abs(fs - ri) / ri), .groups = "drop") |>
-  left_join(title_counts, by = "year")
-write.csv(ident, file.path(OUT, "identification.csv"), row.names = FALSE)
-
-cat("\nspecification divergence:\n")
-ident |>
-  filter(year %in% c(1740, 1760, 1780, 1800, 1820, 1840)) |>
-  as.data.frame() |> print(digits = 3)
-cat("max reldiff from 1780:",
-    round(max(ident$reldiff[ident$year >= 1780]), 3), "\n")
-
-# The same story from the intervals: how wide is the band early vs late?
-cat("\nmean band width on the sentence-length smooth, by era:\n")
-smooth_all |>
-  filter(feature == "avg_sentlen") |>
-  mutate(width = .upper_ci - .lower_ci,
-         era = cut(year, c(-Inf, 1760, 1780, 1820, Inf))) |>
-  group_by(era) |>
-  summarise(mean_width = mean(width), .groups = "drop") |>
-  as.data.frame() |> print(digits = 3)
-
-cat("\ndone. tables in", OUT, "| figures in", FIGS, "\n")
-
-# --- 7. DISPERSION -----------------------------------------------------------
-# The mean models say where each genre's centre moved. They do not say whether
-# the genre spread out. Section 4.3 predicts that National's features become
-# more dispersed while International's do not (the "broadening" reading of its
-# rotation) -- testable here, and the prediction is falsifiable in the useful
-# direction: if dispersion falls, broadening is not what happened.
-#
-# Raw within-year SDs track the level, so a feature whose mean falls shows a
-# falling SD arithmetically. We therefore take residuals from the fitted mean
-# models -- which removes the genre trajectory, the newspaper term, length and
-# German -- and model their dispersion with the same structure.
-
-MIN_CELL <- 30
-
-resid_one <- function(f) {
-  m <- load_model(f)
-  out <- tibble(row = seq_len(nrow(d)),
-                feature = f,
-                r = residuals(m, type = "deviance"))
-  rm(m); gc()
-  out
+fit_cell <- function(f, k = K_CELL, traj = TRUE, data = cells,
+                     family = FAMILIES[[f]] %||% gaussian()) {
+  terms <- c("category",
+             sprintf("s(year, by = category, k = %d)", k),
+             if (traj) "s(year, newspaper, bs = 'fs', m = 1, k = 10)",
+             "german_probability")
+  if (!f %in% NO_LENGTH) terms <- c(terms, "s(log_tokens, k = 10)")
+  bam(as.formula(paste(f, "~", paste(terms, collapse = " + "))),
+      data = data, family = family,
+      method = "fREML", nthreads = N_THREADS)
 }
 
-cells <- map(FEATURES, resid_one) |>
-  list_rbind() |>
-  left_join(d |> mutate(row = row_number()) |>
-              select(row, category, year, newspaper),
-            by = "row") |>
-  group_by(category, feature, newspaper, year) |>
-  summarise(sd_r = sd(r), n = n(), .groups = "drop") |>
-  filter(n >= MIN_CELL, sd_r > 0)
+specs <- tribble(~spec,   ~k,     ~traj,
+                 "main",  K_CELL, TRUE,
+                 "no_fs", K_CELL, FALSE,
+                 "k30",   30,     TRUE)
+spec_names <- specs$spec
 
-cat("\ncells per genre at n >=", MIN_CELL, ":\n")
-print(count(cells, category, feature) |>
-        pivot_wider(names_from = feature, values_from = n) |>
-        as.data.frame())
-
-# log SD: positive and right-skewed, and on the log scale the category smooths
-# read as proportional change in dispersion, comparable across features.
-# s(log(n)) absorbs the small-cell downward bias that survives the floor.
-disp_gam <- function(f) {
-  bam(log(sd_r) ~ category + s(year, by = category, k = K_YEAR) +
-        s(year, newspaper, bs = "fs") + s(log(n)),
-      data = filter(cells, feature == f),
-      gamma = GAMMA_PENALTY, method = "fREML",
-      discrete = TRUE, nthreads = N_THREADS)
+models <- list()
+for (f in FEATURES) for (i in seq_len(nrow(specs))) {
+  s <- specs[i, ]
+  path <- file.path(MODS, sprintf("cell_%s_%s.rds", f, s$spec))
+  if (!file.exists(path)) {
+    cat("fitting", f, s$spec, "... "); t0 <- Sys.time()
+    saveRDS(fit_cell(f, s$k, s$traj), path)
+    cat(sprintf("%.1f min\n", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+  }
+  models[[paste(f, s$spec)]] <- readRDS(path)
 }
 
-disp_smooths <- map(FEATURES, \(f) {
-  m <- disp_gam(f)
-  out <- smooth_estimates(m, select = year_smooths(m), n = 200) |>
-    add_confint() |>
-    mutate(genre = factor(genre_of(.smooth), levels = CATS), feature = f)
-  rm(m); gc(); out
+
+# --- 3. edf vs ceiling (should sit well below k - 1) ---------------------------
+
+edf_tab <- imap(models, \(m, nm) {
+  gratia::edf(m) |>
+    filter(grepl("^s\\(year\\):", .smooth)) |>
+    transmute(feature = sub(" .*", "", nm), spec = sub("^\\S+ ", "", nm),
+              genre = genre_of(.smooth), edf = .edf,
+              ceiling = m$smooth[[1]]$bs.dim - 1)
 }) |> list_rbind()
+write.csv(edf_tab, file.path(OUT, "edf.csv"), row.names = FALSE)
 
-write.csv(disp_smooths, file.path(OUT, "dispersion_smooths.csv"), row.names = FALSE)
+cat("\nedf of the year smooths (of ceiling):\n")
+edf_tab |>
+  mutate(v = sprintf("%.1f/%d", edf, ceiling)) |>
+  select(feature, genre, spec, v) |>
+  pivot_wider(names_from = spec, values_from = v) |>
+  as.data.frame() |> print()
 
-# The section 4.3 test: National vs International over the drift windows.
-cat("\ndispersion change, 1760-89 vs 1800-29 (log-units, + = more dispersed):\n")
-disp_smooths |>
-  filter(year >= 1760, year <= 1829) |>
-  mutate(win = ifelse(year <= 1789, "early", "late")) |>
-  filter(win == "early" | year >= 1800) |>
-  group_by(feature, genre, win) |>
-  summarise(m = mean(.estimate), .groups = "drop") |>
-  pivot_wider(names_from = win, values_from = m) |>
-  mutate(change = late - early) |>
-  select(feature, genre, change) |>
-  pivot_wider(names_from = genre, values_from = change) |>
+
+# --- 3b. diagnostics: k.check, sampling vs between-mean variance, residuals ----
+# (Gamma vs Gaussian check is at the end, it needs grid_for())
+
+kc <- map(FEATURES, \(f) {
+  k <- k.check(models[[paste(f, "main")]])
+  as_tibble(k, rownames = "term") |> mutate(feature = f)
+}) |> list_rbind() |> filter(grepl("^s\\(year\\):", term))
+write.csv(kc, file.path(OUT, "kcheck.csv"), row.names = FALSE)
+cat("\nk.check, year smooths of the main fits (lowest k-index first):\n")
+kc |> arrange(`k-index`) |> head(8) |> as.data.frame() |> print(digits = 3)
+
+vchk <- map(FEATURES, \(f) {
+  m <- models[[paste(f, "main")]]
+  samp <- median(cells[[paste0(f, "__s2")]] / cells$n, na.rm = TRUE)
+  tot  <- var(residuals(m, type = "response"))
+  tibble(feature = f, resid_var = tot, sampling_var = samp,
+         n_star = median(cells[[paste0(f, "__s2")]], na.rm = TRUE) / (tot - samp))
+}) |> list_rbind()
+write.csv(vchk, file.path(OUT, "variance_check.csv"), row.names = FALSE)
+cat("\nn* (article count where sampling variance = between-mean variance):\n")
+print(as.data.frame(vchk), digits = 3)
+
+res <- map(FEATURES, \(f) {
+  m <- models[[paste(f, "main")]]
+  tibble(feature = f, fitted = fitted(m), res = residuals(m, type = "deviance"))
+}) |> list_rbind() |>
+  mutate(panel = factor(FEAT_NAME[feature], levels = FEAT_NAME))
+p <- ggplot(res, aes(fitted, res)) +
+  geom_point(size = .6, alpha = .3) +
+  geom_hline(yintercept = 0, colour = "firebrick", linewidth = .3) +
+  geom_smooth(method = "loess", se = FALSE, colour = "steelblue", linewidth = .6) +
+  facet_wrap(~ panel, ncol = 2, scales = "free") +
+  labs(x = "Fitted", y = "Deviance residual") +
+  theme_minimal(base_size = BASE_SIZE)
+ggsave(file.path(FIGS, "gamcell_residuals.pdf"), p, width = 8.5, height = 9)
+
+# --- 3c. do titles move together? per title and category, 1790-1835 -----------
+# plain OLS slope on the yearly means, no model involved. Disagreeing slopes
+# (or same sign, different shape) are why each title gets its own curve.
+W_SLOPE <- c(1790, 1835); MIN_YEARS <- 15
+slopes <- map(FEATURES, \(f) {
+  cells |>
+    filter(year >= W_SLOPE[1], year <= W_SLOPE[2]) |>
+    group_by(category, newspaper) |>
+    filter(n() >= MIN_YEARS) |>
+    summarise(slope = 10 * coef(lm(.data[[f]] ~ year))[2], .groups = "drop") |>
+    mutate(feature = f)
+}) |> list_rbind()
+agree_tab <- slopes |>
+  group_by(feature, category) |>
+  summarise(titles = n(), falling = sum(slope < 0), rising = sum(slope > 0),
+            agree = max(falling, rising) / titles, .groups = "drop")
+write.csv(slopes, file.path(OUT, "within_title_slopes.csv"), row.names = FALSE)
+write.csv(agree_tab, file.path(OUT, "within_title_agreement.csv"), row.names = FALSE)
+cat("\nwithin-title slopes per decade,", W_SLOPE, "(agree = share on majority side):\n")
+print(as.data.frame(agree_tab), digits = 2)
+
+# diverging bars: titles falling (left) vs rising (right)
+p <- agree_tab |>
+  mutate(panel = factor(FEAT_NAME[feature], levels = FEAT_NAME),
+         category = factor(sub("^fiction$", "Fiction", category),
+                           levels = rev(c("Advertisement", "National",
+                                          "International", "Fiction")))) |>
+  pivot_longer(c(falling, rising), names_to = "dir", values_to = "k") |>
+  mutate(x = ifelse(dir == "falling", -k, k)) |>
+  ggplot(aes(x, category, fill = dir)) +
+  geom_col(width = .7) +
+  geom_vline(xintercept = 0, colour = "grey30", linewidth = .4) +
+  facet_wrap(~ panel, ncol = 2) +
+  scale_fill_manual(values = c(falling = "#d95f02", rising = "#1f78b4"),
+                    labels = c(falling = "titles falling", rising = "titles rising")) +
+  scale_x_continuous(labels = abs, breaks = seq(-12, 12, 4)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 20) +
+  theme(legend.position = "top", panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+ggsave(file.path(FIGS, "gamcell_within_title_slopes.pdf"), p, width = 11, height = 10)
+
+
+# --- 4. trajectories in the features' own units --------------------------------
+# category level + year smooth, newspaper term dropped, covariates at the
+# category mean. Simultaneous bands from posterior draws.
+
+EXCL  <- "s(year,newspaper)"
+YEARS <- seq(min(cells$year), max(cells$year), by = 0.5)
+
+grid_for <- function() {
+  covs <- cells |> group_by(category) |>
+    summarise(german_probability = mean(german_probability),
+              log_tokens = mean(log_tokens), .groups = "drop")
+  expand_grid(category = factor(CATS, levels = CATS), year = YEARS) |>
+    left_join(covs, by = "category") |>
+    mutate(newspaper = cells$newspaper[1])
+}
+
+lp_for <- function(m, nd) {
+  excl <- intersect(EXCL, sapply(m$smooth, \(s) s$label))
+  predict(m, nd, type = "lpmatrix", exclude = excl)
+}
+
+draws_for <- function(m, nd, nsim = 2000) {
+  X <- lp_for(m, nd)
+  set.seed(SEED)
+  B <- mgcv::rmvn(nsim, coef(m), vcov(m, unconditional = TRUE))
+  X %*% t(B)          # grid points x draws, link scale
+}
+
+traj_one <- function(f, spec) {
+  m <- models[[paste(f, spec)]]; nd <- grid_for()
+  inv <- m$family$linkinv
+  X <- lp_for(m, nd)
+  fit <- drop(X %*% coef(m))
+  se  <- sqrt(rowSums((X %*% vcov(m, unconditional = TRUE)) * X))
+  sims <- draws_for(m, nd)
+  crit <- tapply(seq_len(nrow(nd)), nd$category, \(ix) {
+    t <- abs(sweep(sims[ix, ], 1, fit[ix])) / se[ix]
+    quantile(apply(t, 2, max), .95)
+  })
+  nd |> mutate(feature = f, spec = spec,
+               est = inv(fit),
+               lo = inv(fit - 1.96 * se), hi = inv(fit + 1.96 * se),
+               lo_sim = inv(fit - crit[as.character(category)] * se),
+               hi_sim = inv(fit + crit[as.character(category)] * se))
+}
+
+traj <- map(FEATURES, \(f) map(spec_names, \(s) traj_one(f, s)) |> list_rbind()) |>
+  list_rbind()
+write.csv(traj, file.path(OUT, "trajectories.csv"), row.names = FALSE)
+
+# change between window averages (same windows as the classifier drift),
+# per posterior draw, for main and no_fs
+W0 <- c(1740, 1769); W1 <- c(1820, 1849)
+change_tab <- function(spec = "main", w0 = W0, w1 = W1) {
+  map(FEATURES, \(f) {
+    m <- models[[paste(f, spec)]]
+    nd <- grid_for() |> filter(year == round(year))   # whole years
+    sims <- m$family$linkinv(draws_for(m, nd))
+    win <- map(set_names(CATS), \(g) {
+      i0 <- which(nd$category == g & nd$year >= w0[1] & nd$year <= w0[2])
+      i1 <- which(nd$category == g & nd$year >= w1[1] & nd$year <= w1[2])
+      list(a0 = colMeans(sims[i0, , drop = FALSE]),
+           a1 = colMeans(sims[i1, , drop = FALSE]))
+    })
+    # equal weights, so Advertisement's article count doesn't dominate
+    win$Average <- list(a0 = Reduce(`+`, map(win[CATS], "a0")) / length(CATS),
+                        a1 = Reduce(`+`, map(win[CATS], "a1")) / length(CATS))
+    ED <- setdiff(CATS, "Advertisement")
+    win$Editorial <- list(a0 = Reduce(`+`, map(win[ED], "a0")) / length(ED),
+                          a1 = Reduce(`+`, map(win[ED], "a1")) / length(ED))
+    imap(win, \(w, g) {
+      dlt <- w$a1 - w$a0
+      tibble(feature = f, genre = g, spec = spec,
+             from = paste(w0, collapse = "-"), to = paste(w1, collapse = "-"),
+             level_from = mean(w$a0), level_to = mean(w$a1),
+             change = mean(dlt), lo = quantile(dlt, .025), hi = quantile(dlt, .975))
+    }) |> list_rbind()
+  }) |> list_rbind()
+}
+chg <- bind_rows(change_tab("main"), change_tab("no_fs"))
+write.csv(chg, file.path(OUT, "change.csv"), row.names = FALSE)
+
+# LaTeX table: bold = interval excludes zero, dagger = no_fs says the opposite
+TAB_DIGITS <- c(avg_sentlen = 1, avg_mdd = 2, cttr_resid = 2,
+                noun_ttr_resid = 3, nominal_verb_ratio = 3,
+                personal_pronoun_ratio = 3)
+TAB_NAME <- c(avg_sentlen = "Sentence length",
+              avg_mdd = "Dependency distance",
+              cttr_resid = "\\textsc{cttr} (resid.)",
+              noun_ttr_resid = "Noun \\textsc{ttr} (resid.)",
+              nominal_verb_ratio = "Nominal/verb ratio",
+              personal_pronoun_ratio = "Pronoun ratio")
+TAB_CATS <- c(Advertisement = "Advertisement", National = "National",
+              International = "International", fiction = "Fiction",
+              Average = "Average (without Adv.)")
+fmt <- function(x, k) {
+  out <- formatC(x, format = "f", digits = k)
+  out <- sub("^-(0\\.0+)$", "\\1", out)     # no "-0.000"
+  sub("^-", "$-$", out)
+}
+
+cell_txt <- function(f, g) {
+  k  <- TAB_DIGITS[[f]]
+  x  <- chg |> filter(feature == f, spec == "main", genre == g)
+  x2 <- chg |> filter(feature == f, spec == "no_fs", genre == g)
+  sig <- sign(x$lo) == sign(x$hi); sig2 <- sign(x2$lo) == sign(x2$hi)
+  est <- fmt(x$change, k)
+  if (sig) est <- paste0("\\textbf{", est, "}")
+  if (sig && sig2 && sign(x2$change) != sign(x$change))
+    est <- paste0(est, "$^\\dagger$")
+  est
+}
+wide_rows <- map_chr(FEATURES, \(f)
+  paste0(TAB_NAME[[f]], " & ",
+         paste(map_chr(setdiff(names(TAB_CATS), "Average"), \(g) cell_txt(f, g)),
+               collapse = " & "),
+         " & ", cell_txt(f, "Average"), " (", cell_txt(f, "Editorial"), ")",
+         " \\\\"))
+tex_wide <- c(
+  "% generated by notebooks/06_gam.R -- do not edit by hand",
+  "% needs \\usepackage{booktabs}",
+  "\\begin{table}[t]",
+  "\\centering",
+  "\\caption{Change in each indicator's average fitted level between 1740--69 and 1820--49 (the windows of \\autoref{sec:coherence}), in the indicator's own units (tokens for sentence length and dependency distance), from the main model. Average: the mean change of the four categories, each weighted equally regardless of its number of articles; in parentheses, the same for the three editorial categories, without Advertisement. Bold: the 95\\% interval excludes zero. $^\\dagger$: the specification without newspaper trajectories finds a clear change in the opposite direction. A change can be clear here without any dated period in \\autoref{fig:gam_periods} if it was gradual.}",
+  "\\label{tab:gam_change}",
+  "\\small",
+  "\\begin{tabular}{lrrrr@{\\hspace{1.5em}}r}",
+  "\\toprule",
+  paste0(" & ", paste(TAB_CATS, collapse = " & "), " \\\\"),
+  "\\midrule",
+  wide_rows,
+  "\\bottomrule",
+  "\\end{tabular}",
+  "\\end{table}")
+writeLines(tex_wide, file.path(OUT, "gam_change.tex"))
+cat("\nchange in natural units (main model, 95% interval):\n")
+chg |> mutate(across(where(is.double), \(x) signif(x, 3))) |>
+  as.data.frame() |> print()
+
+# colour = category, line type + marker = spec, band only for main
+spec_plot <- function(which_specs) {
+  x <- traj |>
+    filter(spec %in% which_specs) |>
+    mutate(panel = factor(FEAT_NAME[feature], levels = FEAT_NAME),
+           spec  = factor(spec, levels = which_specs))
+  marks <- x |> filter(spec != "main",
+                       year %% 10 == SPEC_MARK[as.character(spec)])
+  ggplot(x, aes(year, est, colour = category)) +
+    geom_ribbon(data = filter(x, spec == "main"),
+                aes(ymin = lo_sim, ymax = hi_sim, fill = category),
+                alpha = .13, colour = NA) +
+    geom_line(aes(linetype = spec), linewidth = .8) +
+    geom_point(data = marks, aes(shape = spec), size = 2.2, stroke = .9,
+               fill = "white") +
+    facet_wrap(~ panel, ncol = 2, scales = "free_y") +
+    scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
+    scale_linetype_manual(values = SPEC_LTY[which_specs],
+                          labels = SPEC_LAB[which_specs], drop = FALSE) +
+    scale_shape_manual(values = SPEC_SHAPE[which_specs],
+                       labels = SPEC_LAB[which_specs], drop = FALSE) +
+    scale_x_continuous(breaks = seq(1740, 1840, 20)) +
+    guides(fill = "none",
+           colour = guide_legend(order = 1),
+           linetype = guide_legend(order = 2, override.aes = list(linewidth = .8)),
+           shape = guide_legend(order = 2)) +
+    labs(x = NULL, y = NULL, colour = NULL, linetype = NULL, shape = NULL) +
+    theme_minimal(base_size = BASE_SIZE) +
+    theme(legend.position = "top", legend.box = "vertical",
+          legend.key.width = unit(2.2, "lines"),
+          panel.grid.minor = element_blank())
+}
+
+ggsave(file.path(FIGS, "gamcell_trajectories.pdf"),
+       spec_plot(c("main", "no_fs")), width = 8.5, height = 10)
+ggsave(file.path(FIGS, "gamcell_sensitivity.pdf"),
+       spec_plot(c("main", "no_fs", "k30")), width = 8.5, height = 10)
+
+# how far each spec sits from main, in main band half-widths
+cat("\nmax |spec - main| / main simultaneous half-width, before 1760 and from:\n")
+traj |>
+  select(feature, category, year, spec, est) |>
+  pivot_wider(names_from = spec, values_from = est) |>
+  left_join(traj |> filter(spec == "main") |>
+              transmute(feature, category, year, hw = (hi_sim - lo_sim) / 2),
+            by = c("feature", "category", "year")) |>
+  pivot_longer(setdiff(spec_names, "main"), names_to = "spec") |>
+  mutate(era = ifelse(year < 1760, "pre1760", "from1760")) |>
+  group_by(feature, spec, era) |>
+  summarise(rel = max(abs(value - main) / hw), .groups = "drop") |>
+  pivot_wider(names_from = c(spec, era), values_from = rel) |>
   as.data.frame() |> print(digits = 2)
 
-p <- disp_smooths |>
-  mutate(panel = factor(FEAT_NAME[feature], levels = unname(FEAT_NAME))) |>
-  ggplot(aes(year, .estimate, colour = genre, fill = genre)) +
-  geom_hline(yintercept = 0, colour = "grey80", linewidth = .3) +
-  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci), alpha = .12, colour = NA) +
-  geom_line(linewidth = .8) +
-  facet_wrap(~ panel, ncol = 2, dir = "h") +
-  scale_colour_manual(values = PAL) + scale_fill_manual(values = PAL) +
-  scale_x_continuous(breaks = seq(1750, 1840, 30)) +
-  guides(fill = "none") +
-  labs(y = "Partial effect on log within-cell SD", x = NULL, colour = NULL) +
-  theme_minimal(base_size = 8) +
-  theme(legend.position = "top", panel.grid.minor = element_blank())
 
-ggsave(file.path(FIGS, "gam_dispersion.pdf"), p, width = 7, height = 6)
+# --- 5. periods of change ----------------------------------------------------
+# slope interval excludes zero; reported = main, minus years where no_fs
+# finds the opposite direction
+
+states_one <- function(f, spec) {
+  m <- models[[paste(f, spec)]]
+  derivatives(m, select = year_smooths(m), type = "central",
+              interval = "simultaneous", n = 400, n_sim = 5000, seed = SEED) |>
+    mutate(genre = genre_of(.smooth),
+           state = case_when(.lower_ci > 0 ~ 1L, .upper_ci < 0 ~ -1L, TRUE ~ 0L)) |>
+    transmute(feature = f, spec, genre, year, state)
+}
+states <- map(FEATURES, \(f) map(spec_names, \(s) states_one(f, s)) |> list_rbind()) |>
+  list_rbind()
+write.csv(states, file.path(OUT, "derivative_states.csv"), row.names = FALSE)
+
+# same derivative grid for every spec, so rows line up
+wide <- states |>
+  group_by(feature, spec, genre) |> mutate(i = row_number()) |> ungroup() |>
+  pivot_wider(id_cols = c(feature, genre, i), names_from = spec,
+              values_from = c(state, year)) |>
+  transmute(feature, genre, year = year_main,
+            main = state_main, no_fs = state_no_fs, k30 = state_k30,
+            contradicted = main != 0 & no_fs == -main,
+            reported  = ifelse(main != 0 & !contradicted, main, 0L))
+
+runs <- function(s, col) {
+  if (all(s[[col]] == 0)) return(tibble())
+  s |> arrange(year) |>
+    mutate(st = .data[[col]], run = cumsum(st != lag(st, default = 0L))) |>
+    filter(st != 0) |>
+    group_by(run, st) |>
+    # length on unrounded years, same as the figure
+    summarise(span = max(year) - min(year),
+              from_yr = round(min(year)), to_yr = round(max(year)),
+              k30_agree = mean(k30 == st), .groups = "drop")
+}
+
+periods_for <- function(col) {
+  wide |> group_by(feature, genre) |>
+    group_modify(\(s, ...) runs(s, col)) |> ungroup() |>
+    filter(!is.na(st)) |>
+    filter(span >= MIN_PERIOD) |>
+    transmute(feature, genre, direction = ifelse(st > 0, "increase", "decrease"),
+              from_yr, to_yr, k30_agree)
+}
+periods      <- periods_for("reported")
+periods_main <- periods_for("main")
+
+write.csv(periods, file.path(OUT, "periods.csv"), row.names = FALSE)
+write.csv(periods_main, file.path(OUT, "periods_main_only.csv"), row.names = FALSE)
+contra <- wide |> filter(contradicted) |> group_by(feature, genre) |>
+  summarise(from_yr = round(min(year)), to_yr = round(max(year)), .groups = "drop")
+write.csv(contra, file.path(OUT, "contradicted.csv"), row.names = FALSE)
+cat("\nyears where no_fs contradicts main (omitted):\n"); print(as.data.frame(contra))
+cat("\nREPORTED periods (> ", MIN_PERIOD - 1, "yr):\n")
+print(as.data.frame(periods), digits = 2)
+cat(nrow(periods), "reported;", nrow(periods_main), "in main alone\n")
+
+# one rectangle per run (no hairline seams); solid = no_fs agrees, pale = main only
+step <- diff(sort(unique(wide$year)))[1]
+segs <- wide |>
+  group_by(feature, genre) |> arrange(year, .by_group = TRUE) |>
+  mutate(period = cumsum(reported != lag(reported, default = 99L))) |>
+  filter(reported != 0) |>
+  group_by(feature, genre, period) |>
+  filter(max(year) - min(year) >= MIN_PERIOD) |>
+  mutate(confirmed = no_fs == reported,
+         piece = cumsum(confirmed != lag(confirmed, default = !first(confirmed)))) |>
+  group_by(feature, genre, period, piece, reported, confirmed) |>
+  summarise(xmin = min(year) - step / 2, xmax = max(year) + step / 2,
+            .groups = "drop") |>
+  mutate(panel = factor(FEAT_NAME[feature], levels = FEAT_NAME),
+         genre = factor(genre, levels = rev(CATS)),
+         y = as.integer(genre),
+         state = factor(reported, levels = c(-1, 1),
+                        labels = c("decrease", "increase")))
+rows <- expand_grid(panel = factor(FEAT_NAME, levels = FEAT_NAME),
+                    genre = factor(CATS, levels = rev(CATS))) |>
+  mutate(y = as.integer(genre))
+
+p <- ggplot() +
+  geom_rect(data = rows, aes(ymin = y - .4, ymax = y + .4),
+            xmin = min(wide$year), xmax = max(wide$year), fill = "grey94") +
+  geom_rect(data = segs, aes(xmin = xmin, xmax = xmax, ymin = y - .4,
+                             ymax = y + .4, fill = state, alpha = confirmed)) +
+  scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = .35), guide = "none") +
+  facet_wrap(~ panel, ncol = 2) +
+  scale_fill_manual(values = c(decrease = "#d95f02", increase = "#1f78b4")) +
+  scale_y_continuous(breaks = seq_along(CATS), labels = rev(CATS)) +
+  scale_x_continuous(breaks = seq(1740, 1840, 20)) +
+  labs(x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = BASE_SIZE) +
+  theme(legend.position = "top", panel.grid = element_blank())
+ggsave(file.path(FIGS, "gamcell_periods.pdf"), p, width = 8.5, height = 6)
+
+# --- 6. Gamma vs Gaussian for sentence length / MDD ---------------------------
+
+fam_cmp <- map(names(FAMILIES), \(f) {
+  path <- file.path(MODS, sprintf("cell_%s_gaussian.rds", f))
+  if (!file.exists(path)) saveRDS(fit_cell(f, family = gaussian()), path)
+  g <- readRDS(path); m <- models[[paste(f, "main")]]
+  nd <- grid_for()
+  excl <- intersect(EXCL, sapply(m$smooth, \(s) s$label))
+  pm <- m$family$linkinv(predict(m, nd, exclude = excl))
+  pg <- predict(g, nd, exclude = excl)
+  tibble(feature = f, aic_gamma = AIC(m), aic_gaussian = AIC(g),
+         max_traj_diff = max(abs(pm - pg)), mean_level = mean(pm))
+}) |> list_rbind()
+write.csv(fam_cmp, file.path(OUT, "family_check.csv"), row.names = FALSE)
+cat("\nGamma(log) vs Gaussian on the means (lower AIC is better):\n")
+print(as.data.frame(fam_cmp), digits = 4)
+
+cat("\ndone. tables in", OUT, "| figures figs/gamcell_*.pdf\n")

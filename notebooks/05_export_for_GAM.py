@@ -34,8 +34,7 @@ cols = required + list(REPRESENTATIVE)
 if "pwa" in df.columns:
     cols.append("pwa")
 else:
-    print("NOTE: no `pwa` column -- merge OCR quality from the ENO dataset "
-          "before fitting, or drop s(pwa) from 06_gam.R")
+    print("NOTE: no `pwa` column (only used for the 0.5 filter upstream)")
 
 out = df[cols]
 

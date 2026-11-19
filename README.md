@@ -1,29 +1,21 @@
 # historical_newsspeak
 
-Tracking diachronic, genre-specific linguistic change in ~5 million Danish newspaper articles (1666–1849). Pipeline: spaCy/DaCy tokenization → stylistic feature extraction → sentiment scoring → factor analysis and generalized additive mixed modeling of change over time, across four genres (National, International, Advertisement, Fiction).
-
+Code for *Genre-Specific Language Change in Danish Newspapers, 1666–1849* (CHR 2027). Tracks genre-specific linguistic change in Danish newspapers, 1740–1848 (ENO corpus, 3.66M articles): DaCy parsing → stylistic features → factor analysis, category separability, and GAMMs of change over time for National, International, Advertisement and Fiction.
 
 ## Running the analysis
 
-To run a random sample of the data (full dataset is too large to store in this repo), first set config.py to take `data/usage_features_w_pwa_test.parquet` as the input file, then start with:
+The feature table is too large for the repo (see Data). With it in `data/`, run in `notebooks/`:
 
-```bash
-source .venv-features/bin/activate
-python notebooks/fa.py
-```
-(or just use the interactive window with the notebook)
+1. `01_prep_data.py` – cleaning, length residualisation
+2. `02_fa.py` – factor analysis
+3. `03_coherence.py` – category separability (classifiers, rolling windows)
+4. `04_correlations.py` – feature–year correlations
+5. `05_export_for_GAM.py` – modelling frame for R
+6. `06_gam.R` – GAMMs on newspaper × year × category means: trajectories, periods of change, change table (`data/gam_cells/gam_change.tex`), figures `figs/gamcell_*.pdf`
 
-This runs the first Factor Analysis script.
-Find the notebooks folder and then run, in sequence:
+For a quick test, point `DATA_FILE` in `src/config.py` to `data/usage_features_w_pwa_test.parquet`.
 
-[skip: `01_prep_data.py` (already done in the test file)]
-1. `03_coherence.py` - runs seperability analysis via logistic regression
-2. `04_correlations.py` - runs correlation analysis
-3. `05_export_for_GAM.py` - make data for R
-4. `06_gam.R` - runs GAMMs in R
-5. `06b_sensitivity_check.R` - runs sensitivity checks in R
-
-
+`notebooks/sample_ad_sentences.py` draws ads for a manual check of sentence segmentation (needs the token shards). `notebooks/archive/` holds the earlier article-level GAMMs, kept for reference.
 
 ## Repository structure
 
@@ -35,38 +27,23 @@ src/                      Data pipeline (tokenization -> features -> sentiment)
 |-- feature_pipeline.py        Per-article stylistic features + semantic sentiment
 |-- finalize_sentiment.py      Corpus-wide sentiment standardization
 |-- recompute_nominal_verb_ratio.py   Fix for a nominality-measure bug (see Known Issues)
-`-- factor_sweep.py             Systematic factor-count sweep utility (imported by notebooks/main.py)
+`-- factor_sweep.py             Factor-count sweep utility (used by 02_fa.py)
 
-notebooks/                Analysis pipeline, run in order
-|-- 01_prep_data.py            Loads processed features, applies cleaning and
-                                length residualisation (TTRs ~ log tokens,
-                                within-article SDs ~ sentence count)
-|-- 02_fa.py                    Factor analysis: VIF, factorability (KMO,
-                                Bartlett), factor-count sweep, promax solution,
-                                and genre-invariance checks (leave-one-out
-                                Tucker congruence + subsampling null)
-|-- 03_coherence.py             Genre separability: multinomial logistic and
-                                gradient-boosted classifiers under grouped CV,
-                                rolling 30-year windows, coefficient profiles
-                                (drift, cosine similarity, ||beta||)
-|-- 05_correlations.py          Spearman correlations between features and
-                                publication year, per genre
-|-- 06_export_for_GAM.py        Writes the modelling frame for R
-|-- 06_gam.R                    GAMMs per indicator and genre (bam, factor
-                                smooth by newspaper); trajectories, first
-                                derivatives, periods of supported change
-`-- 06b_sensitivity_check.R     Refits across k in {8,12,16} and gamma in
-                                {1,1.5,2}; agreement across configurations
+notebooks/                Analysis, run in order (see above)
+|-- 01_prep_data.py ... 05_export_for_GAM.py
+|-- 06_gam.R                    GAMMs on newspaper-year means
+|-- sample_ad_sentences.py      Sample for manual segmentation check
+`-- archive/                    Earlier article-level GAMMs (superseded)
 
 setup_env.sh               Python 3.10 env for src/run_pipeline.py (spaCy/DaCy)
 setup_env_features.sh      Python 3.12 env for src/feature_pipeline.py (GPU sentiment)
-setup_env_analysis.sh      Lightweight CPU-only env for notebooks/main.py (no GPU/spaCy needed)
+setup_env_analysis.sh      CPU-only env for the notebooks
 requirements.txt
-requirements-analysis.txt  Requirements for notebooks/main.py specifically
+requirements-analysis.txt  Requirements for the notebooks
+requirements.R             R packages for 06_gam.R
 
 data/                      (not tracked -- see Data section below for download)
 figs/                      (not tracked) generated figures
-methods_checkpoint.md      Running log of methodological decisions and diagnostics
 ```
 
 ## Environments
@@ -76,7 +53,7 @@ tokenization stage, the feature-extraction stage, and the analysis
 stage have non-overlapping (and partly conflicting) dependency
 requirements: spaCy/DaCy needs Python ≤3.10 and an old `thinc`/
 `numpy<2.0` stack; the sentiment model requires Python ≥3.12 and GPU
-libraries; the analysis stage (`main.py`) needs neither spaCy/DaCy nor
+libraries; the analysis stage needs neither spaCy/DaCy nor
 GPU/torch at all, just stats/ML libraries.
 
 ```bash
@@ -92,7 +69,7 @@ source .venv-features/bin/activate
 bash setup_env_finalize.sh
 source .venv-finalize/bin/activate
 
-# Analysis / notebooks/main.py (CPU, lightweight, no GPU/spaCy)
+# Analysis notebooks (CPU, no GPU/spaCy)
 bash setup_env_analysis.sh
 source .venv-analysis/bin/activate
 ```
@@ -133,8 +110,7 @@ latter skips a shard entirely if its output file already exists.
 - **`lix`/`rix`**: excluded from factor analysis (though kept in
   descriptive tables) -- both are collinear with `avg_sentlen` by
   formula construction (they contain sentence length as a direct term),
-  not just empirically. See `methods_checkpoint.md` for the full VIF
-  diagnostic.
+  not just empirically.
 - **`cttr`, `noun_ttr`, `verb_ttr`**: residualized against log article
   length (OLS) before use -- raw type-token ratios are severely
   length-confounded in this corpus (length explained 88.9% of raw CTTR
@@ -143,10 +119,10 @@ latter skips a shard entirely if its output file already exists.
   length-threshold-gated missingness that otherwise collapses the
   usable sample to <1% of the corpus; reported as descriptive stats on
   their length-eligible subsets only.
-- Mixed-effects models use a **random-intercept-only** specification
-  (`(1|newspaper)`), not a random slope on year -- the random-slope
-  specification is empirically unidentified at this sample size (see
-  `methods_checkpoint.md`).
+- **GAMMs** are fitted to newspaper × year × category means (at least 20
+  articles each), not to articles: articles from one paper-year share an
+  editor and news cycle, and treating them as independent let the basis
+  dimension, not the data, set the shape of the curves.
 
 ## Data
 
@@ -157,7 +133,7 @@ International, Advertisement, Fiction).
 The final processed feature table
 (`usage_features_13-07-26_with_nominal.parquet`, ~648MB) is too large
 to store directly in this GitHub repo and is hosted externally
-(ON DEMAND - email me: XXX)
+(ON DEMAND - email me at: pascale.feldkamp@cas.au.dk)
 
 ## Citation
 
